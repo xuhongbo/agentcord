@@ -103,6 +103,7 @@ export function makeModeButtons(sessionId: string, currentMode: string): ActionR
     { id: 'auto', label: '\u26A1 Auto' },
     { id: 'plan', label: '\uD83D\uDCCB Plan' },
     { id: 'normal', label: '\uD83D\uDEE1\uFE0F Normal' },
+    { id: 'monitor', label: '\uD83E\uDDE0 Monitor' },
   ];
 
   const row = new ActionRowBuilder<ButtonBuilder>();
@@ -443,9 +444,28 @@ export async function handleOutputStream(
   verbose = false,
   mode = 'auto',
   _provider: ProviderName = 'claude',
-): Promise<void> {
+  options: { onEvent?: (event: ProviderEvent) => void } = {},
+): Promise<{
+  text: string;
+  askedUser: boolean;
+  askUserQuestionsJson?: string;
+  hadError: boolean;
+  success: boolean | null;
+  commandCount: number;
+  fileChangeCount: number;
+  recentCommands: string[];
+  changedFiles: string[];
+}> {
   const streamer = new MessageStreamer(channel, sessionId);
   let lastToolName: string | null = null;
+  let askedUser = false;
+  let askUserQuestionsJson: string | undefined;
+  let hadError = false;
+  let success: boolean | null = null;
+  let commandCount = 0;
+  let fileChangeCount = 0;
+  const recentCommands: string[] = [];
+  const changedFiles: string[] = [];
 
   // Show "typing..." indicator while the agent is working
   channel.sendTyping().catch(() => {});
@@ -455,6 +475,7 @@ export async function handleOutputStream(
 
   try {
     for await (const event of stream) {
+      options.onEvent?.(event);
       switch (event.type) {
         case 'text_delta': {
           streamer.append(event.text);
@@ -462,6 +483,8 @@ export async function handleOutputStream(
         }
 
         case 'ask_user': {
+          askedUser = true;
+          askUserQuestionsJson = event.questionsJson;
           // Discard any streamed text before the question (Claude streams partial text before tool)
           await streamer.discard();
           const rendered = renderAskUserQuestion(event.questionsJson, sessionId);
@@ -577,6 +600,10 @@ export async function handleOutputStream(
         // ── Codex-specific events ──
 
         case 'command_execution': {
+          commandCount++;
+          if (recentCommands.length < 8) {
+            recentCommands.push(event.command);
+          }
           if (shouldSuppressCommandExecution(event.command)) break;
           await streamer.finalize();
           const embed = renderCommandExecutionEmbed(event);
@@ -588,6 +615,13 @@ export async function handleOutputStream(
         }
 
         case 'file_change': {
+          fileChangeCount += event.changes.length;
+          for (const change of event.changes) {
+            if (!change.filePath) continue;
+            if (changedFiles.includes(change.filePath)) continue;
+            if (changedFiles.length >= 12) break;
+            changedFiles.push(change.filePath);
+          }
           await streamer.finalize();
           const embed = renderFileChangesEmbed(event);
           await channel.send({
@@ -622,6 +656,7 @@ export async function handleOutputStream(
         // ── Shared events ──
 
         case 'result': {
+          success = event.success;
           const lastText = streamer.getText();
 
           const cost = event.costUsd.toFixed(4);
@@ -629,7 +664,7 @@ export async function handleOutputStream(
             ? `${(event.durationMs / 1000).toFixed(1)}s`
             : 'unknown';
           const turns = event.numTurns || 0;
-          const modeLabel = ({ auto: 'Auto', plan: 'Plan', normal: 'Normal' } as Record<string, string>)[mode] || 'Auto';
+          const modeLabel = ({ auto: 'Auto', plan: 'Plan', normal: 'Normal', monitor: 'Monitor' } as Record<string, string>)[mode] || 'Auto';
 
           const statusLine = event.success
             ? `-# $${cost} | ${duration} | ${turns} turns | ${modeLabel}`
@@ -663,6 +698,7 @@ export async function handleOutputStream(
         }
 
         case 'error': {
+          hadError = true;
           await streamer.finalize();
           const embed = new EmbedBuilder()
             .setColor(0xe74c3c)
@@ -691,6 +727,7 @@ export async function handleOutputStream(
       }
     }
   } catch (err: unknown) {
+    hadError = true;
     await streamer.finalize();
 
     if (!isAbortError(err)) {
@@ -705,4 +742,16 @@ export async function handleOutputStream(
     clearInterval(typingInterval);
     streamer.destroy();
   }
+
+  return {
+    text: streamer.getText(),
+    askedUser,
+    askUserQuestionsJson,
+    hadError,
+    success,
+    commandCount,
+    fileChangeCount,
+    recentCommands,
+    changedFiles,
+  };
 }

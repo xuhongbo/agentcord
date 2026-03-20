@@ -2,7 +2,7 @@ import type { Message, TextChannel } from 'discord.js';
 import sharp from 'sharp';
 import { config } from './config.ts';
 import * as sessions from './session-manager.ts';
-import { handleOutputStream } from './output-handler.ts';
+import { executeSessionPrompt } from './session-executor.ts';
 import { isUserAllowed, isAbortError } from './utils.ts';
 import type { ContentBlock, ImageMediaType } from './types.ts';
 
@@ -176,8 +176,7 @@ export async function handleMessage(message: Message): Promise<void> {
       prompt = blocks;
     }
 
-    const stream = sessions.sendPrompt(session.id, prompt);
-    await handleOutputStream(stream, channel, session.id, session.verbose, session.mode, session.provider);
+    await executeSessionPrompt(session, channel, prompt, { updateMonitorGoal: true });
   } catch (err: unknown) {
     if (isAbortError(err)) {
       return;

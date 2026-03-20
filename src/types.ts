@@ -44,6 +44,9 @@ export interface Session {
   agentPersona?: string;
   verbose: boolean;
   mode: SessionMode;
+  monitorGoal?: string;
+  monitorProviderSessionId?: string;
+  workflowState: SessionWorkflowState;
   isGenerating: boolean;
   createdAt: number;
   lastActivity: number;
@@ -66,13 +69,89 @@ export interface SessionPersistData {
   agentPersona?: string;
   verbose?: boolean;
   mode?: SessionMode;
+  monitorGoal?: string;
+  monitorProviderSessionId?: string;
+  workflowState?: SessionWorkflowState;
   createdAt: number;
   lastActivity: number;
   messageCount: number;
   totalCost: number;
 }
 
-export type SessionMode = 'auto' | 'plan' | 'normal';
+export type SessionMode = 'auto' | 'plan' | 'normal' | 'monitor';
+
+export type SessionWorkflowStatus =
+  | 'idle'
+  | 'worker_running'
+  | 'monitor_review'
+  | 'retrying'
+  | 'awaiting_human'
+  | 'completed'
+  | 'blocked';
+
+export type SessionWorkflowHookName =
+  | 'before_worker_pass'
+  | 'after_worker_pass'
+  | 'before_monitor_review'
+  | 'after_monitor_decision'
+  | 'on_stall'
+  | 'on_human_question'
+  | 'on_complete'
+  | 'on_blocked';
+
+export interface SessionWorkflowState {
+  status: SessionWorkflowStatus;
+  iteration: number;
+  lastHook?: SessionWorkflowHookName;
+  lastWorkerSummary?: string;
+  lastWorkerReport?: SessionWorkerProgressReport;
+  lastMonitorRationale?: string;
+  lastMonitorDecision?: SessionMonitorFeedbackReport;
+  nextProofContract?: SessionNextProofContract;
+  awaitingHumanReason?: string;
+  updatedAt: number;
+}
+
+export interface SessionWorkerProgressReport {
+  originalGoal: string;
+  textualResponse: string;
+  commandCount: number;
+  fileChangeCount: number;
+  meaningfulExecutionEvidence: boolean;
+  providerReportedSuccess: 'yes' | 'no' | 'unknown';
+  workerErrorsObserved: boolean;
+  askedForHumanInput: boolean;
+  claimedCompletedOutcomes: string[];
+  artifacts: string[];
+  validationCommands: string[];
+  goalAssessment: string;
+  remainingGaps: string[];
+  blockers: string[];
+}
+
+export interface SessionMonitorFeedbackReport {
+  status: 'complete' | 'continue' | 'blocked';
+  confidence: 'high' | 'medium' | 'low';
+  rationale: string;
+  steering: string;
+  completionSummary: string;
+  acceptedEvidence: string[];
+  missingEvidence: string[];
+  requiredNextProof: string[];
+  disallowedDrift: string[];
+  blockingReason: string;
+}
+
+export interface SessionNextProofContract {
+  goal: string;
+  acceptedEvidence: string[];
+  missingEvidence: string[];
+  requiredNextProof: string[];
+  requiredArtifacts: string[];
+  requiredValidation: string[];
+  stopCondition: string;
+  avoidUntilProved: string[];
+}
 
 export interface AgentPersona {
   name: string;

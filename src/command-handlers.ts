@@ -16,7 +16,8 @@ import * as sessions from './session-manager.ts';
 import * as projectMgr from './project-manager.ts';
 import * as pluginMgr from './plugin-manager.ts';
 import { listAgents, getAgent } from './agents.ts';
-import { handleOutputStream } from './output-handler.ts';
+import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
+import { makeModeButtons } from './output-handler.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import {
   isUserAllowed,
@@ -115,6 +116,7 @@ export async function handleSession(interaction: ChatInputCommandInteraction): P
     case 'model': return handleSessionModel(interaction);
     case 'verbose': return handleSessionVerbose(interaction);
     case 'mode': return handleSessionMode(interaction);
+    case 'goal': return handleSessionGoal(interaction);
     default:
       await interaction.reply({ content: `Unknown subcommand: ${sub}`, ephemeral: true });
   }
@@ -129,6 +131,30 @@ const PROVIDER_COLORS: Record<ProviderName, number> = {
   claude: 0x3498db,
   codex: 0x10a37f,
 };
+
+const MODE_LABELS: Record<string, string> = {
+  auto: '\u26A1 Auto — full autonomy, no confirmations',
+  plan: '\uD83D\uDCCB Plan — always plans before executing changes',
+  normal: '\uD83D\uDEE1\uFE0F Normal — asks before destructive operations',
+  monitor: '\uD83E\uDDE0 Monitor — keeps steering against the current request until it meets the completion bar',
+};
+
+function normalizeSessionMode(rawMode: string | null | undefined): 'auto' | 'plan' | 'normal' | 'monitor' {
+  const normalized = (rawMode || 'auto').trim().toLowerCase();
+  if (normalized === 'auto' || normalized.startsWith('auto ')) return 'auto';
+  if (normalized === 'plan' || normalized.startsWith('plan ')) return 'plan';
+  if (normalized === 'normal' || normalized.startsWith('normal ')) return 'normal';
+  if (normalized === 'monitor' || normalized.startsWith('monitor ')) return 'monitor';
+  return 'auto';
+}
+
+function modeLabel(mode: string): string {
+  return MODE_LABELS[mode] ?? `Unknown mode (${mode})`;
+}
+
+function resolveRequestedMode(interaction: ChatInputCommandInteraction): 'auto' | 'plan' | 'normal' | 'monitor' {
+  return normalizeSessionMode(interaction.options.getString('mode'));
+}
 
 function resolveCodexSessionOptions(
   interaction: ChatInputCommandInteraction,
@@ -179,6 +205,7 @@ function parseTopicProviderSessionId(topic: string | null): string | undefined {
 async function handleSessionNew(interaction: ChatInputCommandInteraction): Promise<void> {
   const name = interaction.options.getString('name', true);
   const provider = (interaction.options.getString('provider') || 'claude') as ProviderName;
+  const mode = resolveRequestedMode(interaction);
   const codexOptions = resolveCodexSessionOptions(interaction, provider);
   let directory = interaction.options.getString('directory');
 
@@ -206,6 +233,10 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
     // Create session first (handles name deduplication)
     // Use a temp channel ID, we'll update it after creating the channel
     session = await sessions.createSession(name, directory, 'pending', projectName, provider, undefined, codexOptions);
+    if (mode !== 'auto') {
+      sessions.setMode(session.id, mode);
+      session.mode = mode;
+    }
 
     // Create Discord channel with the deduplicated session ID
     channel = await guild.channels.create({
@@ -221,6 +252,7 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
     const fields = [
       { name: 'Channel', value: `#${provider}-${session.id}`, inline: true },
       { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
+      { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: session.directory, inline: true },
       { name: 'Project', value: projectName, inline: true },
     ];
@@ -243,6 +275,7 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
       .setTitle(`${PROVIDER_LABELS[provider]} Session`)
       .setDescription(`Type a message to send it to the AI. Use \`/session stop\` to cancel generation.`);
     const welcomeFields = [
+      { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     ];
     if (session.tmuxName) {
@@ -251,7 +284,10 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
     addCodexPolicyFields(welcomeFields, codexOptions);
     welcomeEmbed.addFields(welcomeFields);
 
-    await channel.send({ embeds: [welcomeEmbed] });
+    await channel.send({
+      embeds: [welcomeEmbed],
+      components: [makeModeButtons(session.id, mode)],
+    });
   } catch (err: unknown) {
     // Clean up on failure
     if (channel) {
@@ -403,6 +439,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
   const providerSessionId = interaction.options.getString('session-id', true);
   const name = interaction.options.getString('name', true);
   const provider = (interaction.options.getString('provider') || 'claude') as ProviderName;
+  const mode = resolveRequestedMode(interaction);
   const codexOptions = resolveCodexSessionOptions(interaction, provider);
   const directory = interaction.options.getString('directory') || config.defaultDirectory;
 
@@ -438,6 +475,10 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
       providerSessionId,
       codexOptions,
     );
+    if (mode !== 'auto') {
+      sessions.setMode(session.id, mode);
+      session.mode = mode;
+    }
 
     channel = await guild.channels.create({
       name: `${provider}-${session.id}`,
@@ -451,6 +492,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
     const fields = [
       { name: 'Channel', value: `#${provider}-${session.id}`, inline: true },
       { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
+      { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: session.directory, inline: true },
       { name: 'Project', value: projectName, inline: true },
       { name: 'Provider Session', value: `\`${providerSessionId}\``, inline: false },
@@ -469,6 +511,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
     log(`Session "${session.id}" (${provider}, resumed ${providerSessionId}) created by ${interaction.user.tag} in ${directory}`);
 
     const welcomeFields = [
+      { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
       { name: 'Provider Session', value: `\`${providerSessionId}\``, inline: false },
     ];
@@ -488,6 +531,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
           )
           .addFields(welcomeFields),
       ],
+      components: [makeModeButtons(session.id, mode)],
     });
   } catch (err: unknown) {
     if (channel) {
@@ -523,7 +567,7 @@ async function handleSessionList(interaction: ChatInputCommandInteraction): Prom
   for (const [project, projectSessions] of grouped) {
     const lines = projectSessions.map(s => {
       const status = s.isGenerating ? '🟢 generating' : '⚪ idle';
-      const modeEmoji = { auto: '\u26A1', plan: '\uD83D\uDCCB', normal: '\uD83D\uDEE1\uFE0F' }[s.mode] || '\u26A1';
+      const modeEmoji = { auto: '\u26A1', plan: '\uD83D\uDCCB', normal: '\uD83D\uDEE1\uFE0F', monitor: '\uD83E\uDDE0' }[s.mode] || '\u26A1';
       const providerTag = `[${s.provider}]`;
       const codexPolicy = s.provider === 'codex'
         ? [
@@ -581,9 +625,8 @@ async function handleSessionContinue(interaction: ChatInputCommandInteraction): 
   await interaction.deferReply();
   try {
     const channel = interaction.channel as TextChannel;
-    const stream = sessions.continueSession(session.id);
     await interaction.editReply('Continuing...');
-    await handleOutputStream(stream, channel, session.id, session.verbose, session.mode, session.provider);
+    await executeSessionContinue(session, channel);
   } catch (err: unknown) {
     await interaction.editReply(`Error: ${(err as Error).message}`);
   }
@@ -789,12 +832,6 @@ async function handleSessionVerbose(interaction: ChatInputCommandInteraction): P
   });
 }
 
-const MODE_LABELS: Record<string, string> = {
-  auto: '\u26A1 Auto — full autonomy, no confirmations',
-  plan: '\uD83D\uDCCB Plan — always plans before executing changes',
-  normal: '\uD83D\uDEE1\uFE0F Normal — asks before destructive operations',
-};
-
 async function handleSessionMode(interaction: ChatInputCommandInteraction): Promise<void> {
   const session = sessions.getSessionByChannel(interaction.channelId);
   if (!session) {
@@ -802,11 +839,57 @@ async function handleSessionMode(interaction: ChatInputCommandInteraction): Prom
     return;
   }
 
-  const mode = interaction.options.getString('mode', true) as 'auto' | 'plan' | 'normal';
+  const mode = normalizeSessionMode(interaction.options.getString('mode', true));
   sessions.setMode(session.id, mode);
 
   await interaction.reply({
-    content: `Mode set to **${MODE_LABELS[mode]}**`,
+    content: `Mode set to **${modeLabel(mode)}**`,
+    ephemeral: true,
+  });
+}
+
+async function handleSessionGoal(interaction: ChatInputCommandInteraction): Promise<void> {
+  const session = sessions.getSessionByChannel(interaction.channelId);
+  if (!session) {
+    await interaction.reply({ content: 'No session in this channel.', ephemeral: true });
+    return;
+  }
+
+  const nextGoal = interaction.options.getString('goal');
+  const shouldClear = interaction.options.getBoolean('clear') === true;
+
+  if (shouldClear) {
+    sessions.setMonitorGoal(session.id, undefined);
+    await interaction.reply({
+      content: 'Monitor goal cleared for this session.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (nextGoal && nextGoal.trim()) {
+    sessions.setMonitorGoal(session.id, nextGoal.trim());
+    await interaction.reply({
+      content: session.mode === 'monitor'
+        ? `Monitor goal updated:\n> ${nextGoal.trim()}`
+        : `Saved monitor goal for this session (monitor mode is currently **${modeLabel(session.mode)}**):\n> ${nextGoal.trim()}`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (session.monitorGoal) {
+    await interaction.reply({
+      content: `Current monitor goal:\n> ${session.monitorGoal}`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: session.mode === 'monitor'
+      ? 'No monitor goal is currently saved for this session. Send a fresh request or use `/session goal goal:<text>` to set one.'
+      : 'No monitor goal is currently saved for this session.',
     ephemeral: true,
   });
 }
@@ -992,8 +1075,7 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
       try {
         const channel = interaction.channel as TextChannel;
         await interaction.editReply(`Running skill **${name}**...`);
-        const stream = sessions.sendPrompt(session.id, expanded);
-        await handleOutputStream(stream, channel, session.id, session.verbose, session.mode, session.provider);
+        await executeSessionPrompt(session, channel, expanded);
       } catch (err: unknown) {
         await interaction.editReply(`Error: ${(err as Error).message}`);
       }

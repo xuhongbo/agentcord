@@ -38,6 +38,7 @@ function setBaseEnv(): void {
   process.env.ALLOW_ALL_USERS = 'true';
   process.env.ALLOWED_USERS = '';
   process.env.DEFAULT_DIRECTORY = process.cwd();
+  process.env.ALLOWED_PATHS = '';
 }
 
 describe('session-manager', () => {
@@ -230,5 +231,156 @@ describe('session-manager', () => {
     await expect(
       sessions.createSession('fix-auth', tmpCwd, 'pending', 'project-x', 'codex', undefined, { recoverExisting: true }),
     ).rejects.toThrow('Session "fix-auth" already exists');
+  });
+
+  it('persists monitor goal fields after linking', async () => {
+    const provider = makeProviderStub();
+    ensureProviderMock.mockResolvedValue(provider);
+    const sessions = await import('../src/session-manager.ts');
+
+    const session = await sessions.createSession('monitor-goal', tmpCwd, 'pending', 'project-x', 'codex');
+    sessions.setMode(session.id, 'monitor');
+    sessions.setMonitorGoal(session.id, 'Build a hard memory benchmark.');
+    await sessions.linkChannel(session.id, 'chan-monitor');
+
+    const storePath = join(tmpCwd, '.discord-friends', 'sessions.json');
+    const persisted = JSON.parse(readFileSync(storePath, 'utf-8'));
+    expect(persisted[0]).toMatchObject({
+      channelId: 'chan-monitor',
+      mode: 'monitor',
+      monitorGoal: 'Build a hard memory benchmark.',
+      workflowState: {
+        status: 'idle',
+        iteration: 0,
+      },
+    });
+  });
+
+  it('preserves previous monitor goal when entering monitor mode', async () => {
+    const provider = makeProviderStub();
+    ensureProviderMock.mockResolvedValue(provider);
+    const sessions = await import('../src/session-manager.ts');
+
+    const session = await sessions.createSession('monitor-reset', tmpCwd, 'pending', 'project-x', 'codex');
+    sessions.setMonitorGoal(session.id, 'old goal');
+    sessions.setMode(session.id, 'monitor');
+
+    const live = sessions.getSession(session.id)!;
+    expect(live.monitorGoal).toBe('old goal');
+    expect(live.monitorProviderSessionId).toBeUndefined();
+    expect(live.workflowState.status).toBe('idle');
+    expect(live.workflowState.iteration).toBe(0);
+  });
+
+  it('updates and persists workflow state transitions', async () => {
+    const provider = makeProviderStub();
+    ensureProviderMock.mockResolvedValue(provider);
+    const sessions = await import('../src/session-manager.ts');
+
+    const session = await sessions.createSession('workflow-state', tmpCwd, 'pending', 'project-x', 'codex');
+    sessions.updateWorkflowState(session.id, {
+      status: 'monitor_review',
+      iteration: 2,
+      lastHook: 'after_worker_pass',
+      lastWorkerSummary: 'Created draft artifacts.',
+      lastWorkerReport: {
+        originalGoal: 'Build the artifacts.',
+        textualResponse: 'Created draft artifacts.',
+        commandCount: 2,
+        fileChangeCount: 1,
+        meaningfulExecutionEvidence: true,
+        providerReportedSuccess: 'yes',
+        workerErrorsObserved: false,
+        askedForHumanInput: false,
+        claimedCompletedOutcomes: ['Created draft artifacts.'],
+        artifacts: ['/tmp/project/artifact.md'],
+        validationCommands: ['npm test -- artifact'],
+        goalAssessment: 'Draft artifacts exist but validation is incomplete.',
+        remainingGaps: ['Validation is still missing.'],
+        blockers: [],
+      },
+      lastMonitorRationale: 'Validation is still missing.',
+      lastMonitorDecision: {
+        status: 'continue',
+        confidence: 'medium',
+        rationale: 'Validation is still missing.',
+        steering: 'Run validation and report the result.',
+        completionSummary: '',
+        acceptedEvidence: ['Draft artifacts were created.'],
+        missingEvidence: ['Validation results.'],
+        requiredNextProof: ['Run validation and show the result.'],
+        disallowedDrift: ['Do not add unrelated improvements before validation.'],
+        blockingReason: '',
+      },
+    });
+    await sessions.linkChannel(session.id, 'chan-workflow');
+
+    const live = sessions.getSession(session.id)!;
+    expect(live.workflowState).toMatchObject({
+      status: 'monitor_review',
+      iteration: 2,
+      lastHook: 'after_worker_pass',
+      lastWorkerSummary: 'Created draft artifacts.',
+      lastWorkerReport: {
+        originalGoal: 'Build the artifacts.',
+        textualResponse: 'Created draft artifacts.',
+      },
+      lastMonitorRationale: 'Validation is still missing.',
+      lastMonitorDecision: {
+        status: 'continue',
+        rationale: 'Validation is still missing.',
+        requiredNextProof: ['Run validation and show the result.'],
+      },
+    });
+
+    const storePath = join(tmpCwd, '.discord-friends', 'sessions.json');
+    const persisted = JSON.parse(readFileSync(storePath, 'utf-8'));
+    expect(persisted[0].workflowState).toMatchObject({
+      status: 'monitor_review',
+      iteration: 2,
+      lastHook: 'after_worker_pass',
+      lastWorkerSummary: 'Created draft artifacts.',
+      lastWorkerReport: {
+        originalGoal: 'Build the artifacts.',
+        textualResponse: 'Created draft artifacts.',
+      },
+      lastMonitorRationale: 'Validation is still missing.',
+      lastMonitorDecision: {
+        status: 'continue',
+        rationale: 'Validation is still missing.',
+        requiredNextProof: ['Run validation and show the result.'],
+      },
+    });
+  });
+
+  it('uses a separate provider thread for monitor prompts', async () => {
+    let promptCalls = 0;
+    let seenOptions: any[] = [];
+    const provider = makeProviderStub();
+    provider.sendPrompt.mockImplementation(async function* (_prompt: unknown, options: unknown) {
+      promptCalls++;
+      seenOptions.push(options);
+      yield { type: 'session_init', providerSessionId: promptCalls === 1 ? 'thread_worker' : 'thread_monitor' };
+      yield { type: 'text_delta', text: promptCalls === 1 ? 'worker' : '{"status":"complete","confidence":"high","rationale":"done","steering":"","completionSummary":"done"}' };
+      yield { type: 'result', success: true, costUsd: 0.1, durationMs: 1, numTurns: 1, errors: [] };
+    });
+    ensureProviderMock.mockResolvedValue(provider);
+
+    const sessions = await import('../src/session-manager.ts');
+    const session = await sessions.createSession('monitor-thread', tmpCwd, 'pending', 'project-x', 'codex');
+
+    for await (const _event of sessions.sendPrompt(session.id, 'worker prompt')) {
+      // consume
+    }
+    for await (const _event of sessions.sendMonitorPrompt(session.id, 'monitor prompt')) {
+      // consume
+    }
+
+    const live = sessions.getSession(session.id)!;
+    expect(live.providerSessionId).toBe('thread_worker');
+    expect(live.monitorProviderSessionId).toBe('thread_monitor');
+    expect(seenOptions[0]).toMatchObject({ providerSessionId: undefined });
+    expect(seenOptions[1]).toMatchObject({ providerSessionId: undefined });
+    expect(seenOptions[1].systemPromptParts.some((part: string) => part.includes('monitor agent'))).toBe(true);
   });
 });

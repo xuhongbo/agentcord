@@ -39,6 +39,14 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
         .addBooleanOption(opt =>
           opt.setName('network-access').setDescription('Allow network in workspace-write sandbox (Codex only)'))
         .addStringOption(opt =>
+          opt.setName('mode').setDescription('Initial session mode')
+            .addChoices(
+              { name: 'Auto — full autonomy', value: 'auto' },
+              { name: 'Plan — plan before executing', value: 'plan' },
+              { name: 'Normal — ask before destructive ops', value: 'normal' },
+              { name: 'Monitor — keep steering until complete', value: 'monitor' },
+            ))
+        .addStringOption(opt =>
           opt.setName('directory').setDescription('Working directory (default: configured default)')))
     .addSubcommand(sub =>
       sub.setName('resume')
@@ -71,6 +79,14 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
         .addBooleanOption(opt =>
           opt.setName('network-access').setDescription('Allow network in workspace-write sandbox (Codex only)'))
         .addStringOption(opt =>
+          opt.setName('mode').setDescription('Initial session mode')
+            .addChoices(
+              { name: 'Auto — full autonomy', value: 'auto' },
+              { name: 'Plan — plan before executing', value: 'plan' },
+              { name: 'Normal — ask before destructive ops', value: 'normal' },
+              { name: 'Monitor — keep steering until complete', value: 'monitor' },
+            ))
+        .addStringOption(opt =>
           opt.setName('directory').setDescription('Working directory (default: configured default)')))
     .addSubcommand(sub =>
       sub.setName('list').setDescription('List active sessions'))
@@ -100,14 +116,22 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
       sub.setName('verbose').setDescription('Toggle showing tool calls and results in this session'))
     .addSubcommand(sub =>
       sub.setName('mode')
-        .setDescription('Set session mode (auto/plan/normal)')
+        .setDescription('Set session mode (auto/plan/normal/monitor)')
         .addStringOption(opt =>
           opt.setName('mode').setDescription('Session mode').setRequired(true)
             .addChoices(
               { name: 'Auto \u2014 full autonomy', value: 'auto' },
               { name: 'Plan \u2014 plan before executing', value: 'plan' },
               { name: 'Normal \u2014 ask before destructive ops', value: 'normal' },
-            )));
+              { name: 'Monitor \u2014 keep steering until complete', value: 'monitor' },
+            )))
+    .addSubcommand(sub =>
+      sub.setName('goal')
+        .setDescription('Show or update the monitor goal for this session')
+        .addStringOption(opt =>
+          opt.setName('goal').setDescription('New monitor goal to save for this session'))
+        .addBooleanOption(opt =>
+          opt.setName('clear').setDescription('Clear the saved monitor goal')));
 
   const shell = new SlashCommandBuilder()
     .setName('shell')

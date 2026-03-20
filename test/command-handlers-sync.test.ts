@@ -4,6 +4,11 @@ import { ChannelType } from 'discord.js';
 const createSessionMock = vi.fn();
 const listTmuxSessionsMock = vi.fn();
 const getAllSessionsMock = vi.fn();
+const getSessionByChannelMock = vi.fn();
+const setModeMock = vi.fn();
+const setMonitorGoalMock = vi.fn();
+const linkChannelMock = vi.fn();
+const makeModeButtonsMock = vi.fn(() => ({ components: [] }));
 
 const getOrCreateProjectMock = vi.fn();
 const getProjectByCategoryIdMock = vi.fn();
@@ -14,7 +19,7 @@ vi.mock('../src/session-manager.ts', () => ({
   createSession: createSessionMock,
   listTmuxSessions: listTmuxSessionsMock,
   getAllSessions: getAllSessionsMock,
-  getSessionByChannel: vi.fn(),
+  getSessionByChannel: getSessionByChannelMock,
   getSession: vi.fn(),
   sendPrompt: vi.fn(),
   continueSession: vi.fn(),
@@ -22,9 +27,10 @@ vi.mock('../src/session-manager.ts', () => ({
   abortSession: vi.fn(),
   setModel: vi.fn(),
   setVerbose: vi.fn(),
-  setMode: vi.fn(),
+  setMode: setModeMock,
+  setMonitorGoal: setMonitorGoalMock,
   getAttachInfo: vi.fn(),
-  linkChannel: vi.fn(),
+  linkChannel: linkChannelMock,
 }));
 
 vi.mock('../src/project-manager.ts', () => ({
@@ -66,6 +72,7 @@ vi.mock('../src/agents.ts', () => ({
 
 vi.mock('../src/output-handler.ts', () => ({
   handleOutputStream: vi.fn(),
+  makeModeButtons: makeModeButtonsMock,
 }));
 
 vi.mock('../src/shell-handler.ts', () => ({
@@ -82,6 +89,11 @@ describe('/session sync codex recovery', () => {
     createSessionMock.mockReset();
     listTmuxSessionsMock.mockReset();
     getAllSessionsMock.mockReset();
+    getSessionByChannelMock.mockReset();
+    setModeMock.mockReset();
+    setMonitorGoalMock.mockReset();
+    linkChannelMock.mockReset();
+    makeModeButtonsMock.mockClear();
     getOrCreateProjectMock.mockReset();
     getProjectByCategoryIdMock.mockReset();
     getProjectMock.mockReset();
@@ -194,5 +206,186 @@ describe('/session sync codex recovery', () => {
       { recoverExisting: true },
     );
     expect(getOrCreateProjectMock).toHaveBeenCalledWith('default-project', '/tmp/default-project', 'cat-2');
+  });
+
+  it('applies the requested initial mode when creating a new session', async () => {
+    getProjectMock.mockReturnValue(undefined);
+    getOrCreateProjectMock.mockReturnValue({ categoryId: 'cat-1', logChannelId: 'log-1' });
+    createSessionMock.mockResolvedValue({
+      id: 'bench-run',
+      directory: '/tmp/work-repo',
+      tmuxName: '',
+      mode: 'auto',
+    });
+
+    const createdChannel = {
+      id: 'chan-new',
+      send: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const guild = {
+      channels: {
+        cache: {
+          get: vi.fn().mockReturnValue(undefined),
+          find: vi.fn().mockReturnValue(undefined),
+        },
+        create: vi.fn()
+          .mockResolvedValueOnce({ id: 'cat-1', children: { cache: { find: vi.fn().mockReturnValue(undefined) } } })
+          .mockResolvedValueOnce({ id: 'log-1' })
+          .mockResolvedValueOnce(createdChannel),
+      },
+    };
+
+    const interaction = {
+      user: { id: 'user-1', tag: 'user#0001' },
+      guild,
+      channel: { parentId: null },
+      options: {
+        getSubcommand: () => 'new',
+        getString: (name: string, required?: boolean) => {
+          if (name === 'name') return 'bench-run';
+          if (name === 'provider') return 'codex';
+          if (name === 'mode') return 'monitor';
+          if (name === 'directory') return '/tmp/work-repo';
+          if (name === 'sandbox-mode' || name === 'approval-policy') return null;
+          if (required) throw new Error(`Unexpected required option: ${name}`);
+          return null;
+        },
+        getBoolean: () => null,
+      },
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { handleSession } = await import('../src/command-handlers.ts');
+    await handleSession(interaction as any);
+
+    expect(setModeMock).toHaveBeenCalledWith('bench-run', 'monitor');
+    expect(linkChannelMock).toHaveBeenCalledWith('bench-run', 'chan-new');
+    expect(makeModeButtonsMock).toHaveBeenCalledWith('bench-run', 'monitor');
+    expect(createdChannel.send).toHaveBeenCalledWith(expect.objectContaining({
+      components: [expect.anything()],
+    }));
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.objectContaining({
+      embeds: [expect.anything()],
+    }));
+  });
+
+  it('normalizes stale monitor mode values when changing an active session mode', async () => {
+    getSessionByChannelMock.mockReturnValue({
+      id: 'sess-1',
+      mode: 'auto',
+    });
+
+    const interaction = {
+      user: { id: 'user-1' },
+      channelId: 'chan-1',
+      options: {
+        getSubcommand: () => 'mode',
+        getString: (name: string) => {
+          if (name === 'mode') return 'Monitor — keep steering until complete';
+          return null;
+        },
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { handleSession } = await import('../src/command-handlers.ts');
+    await handleSession(interaction as any);
+
+    expect(setModeMock).toHaveBeenCalledWith('sess-1', 'monitor');
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Monitor'),
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalledWith({
+      content: expect.stringContaining('undefined'),
+      ephemeral: true,
+    });
+  });
+
+  it('shows the current saved monitor goal for a session', async () => {
+    getSessionByChannelMock.mockReturnValue({
+      id: 'sess-1',
+      mode: 'monitor',
+      monitorGoal: 'Build a stricter benchmark pack.',
+    });
+
+    const interaction = {
+      user: { id: 'user-1' },
+      channelId: 'chan-1',
+      options: {
+        getSubcommand: () => 'goal',
+        getString: () => null,
+        getBoolean: () => null,
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { handleSession } = await import('../src/command-handlers.ts');
+    await handleSession(interaction as any);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Current monitor goal:\n> Build a stricter benchmark pack.',
+      ephemeral: true,
+    });
+  });
+
+  it('updates the monitor goal explicitly during a session', async () => {
+    getSessionByChannelMock.mockReturnValue({
+      id: 'sess-1',
+      mode: 'monitor',
+      monitorGoal: 'old goal',
+    });
+
+    const interaction = {
+      user: { id: 'user-1' },
+      channelId: 'chan-1',
+      options: {
+        getSubcommand: () => 'goal',
+        getString: (name: string) => name === 'goal' ? 'Make the benchmark harder against contradiction attacks.' : null,
+        getBoolean: () => null,
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { handleSession } = await import('../src/command-handlers.ts');
+    await handleSession(interaction as any);
+
+    expect(setMonitorGoalMock).toHaveBeenCalledWith('sess-1', 'Make the benchmark harder against contradiction attacks.');
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Monitor goal updated:\n> Make the benchmark harder against contradiction attacks.',
+      ephemeral: true,
+    });
+  });
+
+  it('clears the monitor goal explicitly during a session', async () => {
+    getSessionByChannelMock.mockReturnValue({
+      id: 'sess-1',
+      mode: 'monitor',
+      monitorGoal: 'old goal',
+    });
+
+    const interaction = {
+      user: { id: 'user-1' },
+      channelId: 'chan-1',
+      options: {
+        getSubcommand: () => 'goal',
+        getString: () => null,
+        getBoolean: (name: string) => name === 'clear' ? true : null,
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { handleSession } = await import('../src/command-handlers.ts');
+    await handleSession(interaction as any);
+
+    expect(setMonitorGoalMock).toHaveBeenCalledWith('sess-1', undefined);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Monitor goal cleared for this session.',
+      ephemeral: true,
+    });
   });
 });

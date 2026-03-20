@@ -6,7 +6,7 @@ import { Store } from './persistence.ts';
 import { getAgent } from './agents.ts';
 import { getPersonality } from './project-manager.ts';
 import { sanitizeSessionName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
-import type { Session, SessionPersistData, SessionMode } from './types.ts';
+import type { Session, SessionPersistData, SessionMode, SessionWorkflowState } from './types.ts';
 import { config } from './config.ts';
 
 const SESSION_PREFIX = 'agentcord-';
@@ -15,12 +15,42 @@ const MODE_PROMPTS: Record<SessionMode, string> = {
   auto: '',
   plan: 'You MUST use EnterPlanMode at the start of every task. Present your plan for user approval before making any code changes. Do not write or edit files until the user approves the plan.',
   normal: 'Before performing destructive or significant operations (deleting files, running dangerous commands, making large refactors, writing to many files), use AskUserQuestion to confirm with the user first. Ask for explicit approval before proceeding with changes.',
+  monitor: 'This session is running in monitored autonomy mode. Treat the active user request as the task objective and keep working until it is fully satisfied. Do not stop at a partial implementation or ask the user for follow-up direction unless you are truly blocked by missing permissions, credentials, or required external information that you cannot obtain yourself. When you believe the task is complete, explain concretely what was finished and why it satisfies the request.',
 };
+
+const MONITOR_SYSTEM_PROMPT = `You are a monitor agent supervising another coding agent.
+
+Your job is to judge progress against the user's original request and decide whether the worker should continue.
+
+Return JSON only in this schema:
+{
+  "status": "complete" | "continue" | "blocked",
+  "confidence": "high" | "medium" | "low",
+  "rationale": "Short explanation tied to the original request",
+  "steering": "Concrete next instructions for the worker. Empty string only when status is complete.",
+  "completionSummary": "Short summary of what is complete. Empty string unless status is complete."
+}
+
+Rules:
+- Favor continuing unless the task clearly satisfies the original request.
+- Judge against robustness, completeness, and the user's stated quality bar, not just whether some code changed.
+- If the worker stopped early, ask for the next concrete step instead of accepting the output.
+- Use "blocked" only for true blockers the worker cannot resolve autonomously.
+- Never ask the human for optional next steps.
+- Output valid JSON and nothing else.`;
 const sessionStore = new Store<SessionPersistData[]>('sessions.json');
 
 const sessions = new Map<string, Session>();
 const channelToSession = new Map<string, string>();
 let saveQueue: Promise<void> = Promise.resolve();
+
+function createDefaultWorkflowState(): SessionWorkflowState {
+  return {
+    status: 'idle',
+    iteration: 0,
+    updatedAt: Date.now(),
+  };
+}
 
 // Async tmux helper — never blocks the event loop
 function tmux(...args: string[]): Promise<string> {
@@ -86,6 +116,9 @@ export async function loadSessions(): Promise<void> {
       providerSessionId,
       verbose: s.verbose ?? false,
       mode: s.mode ?? 'auto',
+      monitorGoal: s.monitorGoal,
+      monitorProviderSessionId: s.monitorProviderSessionId,
+      workflowState: s.workflowState ?? createDefaultWorkflowState(),
       isGenerating: false,
     });
     channelToSession.set(s.channelId, s.id);
@@ -117,6 +150,9 @@ async function persistSessionsNow(): Promise<void> {
       agentPersona: s.agentPersona,
       verbose: s.verbose || undefined,
       mode: s.mode !== 'auto' ? s.mode : undefined,
+      monitorGoal: s.monitorGoal,
+      monitorProviderSessionId: s.monitorProviderSessionId,
+      workflowState: s.workflowState,
       createdAt: s.createdAt,
       lastActivity: s.lastActivity,
       messageCount: s.messageCount,
@@ -217,6 +253,9 @@ export async function createSession(
     networkAccessEnabled: effectiveOptions.networkAccessEnabled,
     verbose: false,
     mode: 'auto',
+    monitorGoal: undefined,
+    monitorProviderSessionId: undefined,
+    workflowState: createDefaultWorkflowState(),
     isGenerating: false,
     createdAt: Date.now(),
     lastActivity: Date.now(),
@@ -327,8 +366,52 @@ export function setMode(sessionId: string, mode: SessionMode): void {
   const session = sessions.get(sessionId);
   if (session) {
     session.mode = mode;
+    if (mode === 'monitor') {
+      session.monitorProviderSessionId = undefined;
+    }
+    session.workflowState = createDefaultWorkflowState();
     saveSessions();
   }
+}
+
+export function setMonitorGoal(sessionId: string, goal: string | undefined): void {
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.monitorGoal = goal;
+    if (!goal) {
+      session.monitorProviderSessionId = undefined;
+    }
+    session.workflowState = createDefaultWorkflowState();
+    saveSessions();
+  }
+}
+
+export function updateWorkflowState(
+  sessionId: string,
+  patch: Partial<SessionWorkflowState> | ((current: SessionWorkflowState) => SessionWorkflowState),
+): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  const next = typeof patch === 'function'
+    ? patch(session.workflowState)
+    : {
+        ...session.workflowState,
+        ...patch,
+      };
+
+  session.workflowState = {
+    ...next,
+    updatedAt: Date.now(),
+  };
+  saveSessions();
+}
+
+export function resetWorkflowState(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  session.workflowState = createDefaultWorkflowState();
+  saveSessions();
 }
 
 export function setAgentPersona(sessionId: string, persona: string | undefined): void {
@@ -355,6 +438,16 @@ function buildSystemPromptParts(session: Session): string[] {
   const modePrompt = MODE_PROMPTS[session.mode];
   if (modePrompt) parts.push(modePrompt);
 
+  return parts;
+}
+
+function buildMonitorSystemPromptParts(session: Session): string[] {
+  const parts: string[] = [];
+
+  const personality = getPersonality(session.projectName);
+  if (personality) parts.push(personality);
+
+  parts.push(MONITOR_SYSTEM_PROMPT);
   return parts;
 }
 
@@ -477,10 +570,52 @@ export async function* continueSession(
   }
 }
 
+export async function* sendMonitorPrompt(
+  sessionId: string,
+  prompt: string,
+): AsyncGenerator<ProviderEvent> {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error(`Session "${sessionId}" not found`);
+
+  const provider = await ensureProvider(session.provider);
+  const systemPromptParts = buildMonitorSystemPromptParts(session);
+  session.lastActivity = Date.now();
+
+  const stream = provider.sendPrompt(prompt, {
+    directory: session.directory,
+    providerSessionId: session.monitorProviderSessionId,
+    model: session.model,
+    sandboxMode: session.sandboxMode,
+    approvalPolicy: session.approvalPolicy,
+    networkAccessEnabled: session.networkAccessEnabled,
+    systemPromptParts,
+    abortController: new AbortController(),
+  });
+
+  for await (const event of stream) {
+    if (event.type === 'session_init') {
+      session.monitorProviderSessionId = event.providerSessionId || undefined;
+      await saveSessions();
+    }
+    if (event.type === 'result') {
+      session.totalCost += event.costUsd;
+    }
+    yield event;
+  }
+
+  session.lastActivity = Date.now();
+  await saveSessions();
+}
+
 export function abortSession(sessionId: string): boolean {
+  return abortSessionWithReason(sessionId, 'user');
+}
+
+export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watchdog'): boolean {
   const session = sessions.get(sessionId);
   if (!session) return false;
   const controller = (session as any)._controller as AbortController | undefined;
+  (session as any)._abortReason = reason;
   if (controller) {
     controller.abort();
   }
@@ -492,6 +627,14 @@ export function abortSession(sessionId: string): boolean {
     return true;
   }
   return !!controller;
+}
+
+export function consumeAbortReason(sessionId: string): 'user' | 'watchdog' | undefined {
+  const session = sessions.get(sessionId);
+  if (!session) return undefined;
+  const reason = (session as any)._abortReason as 'user' | 'watchdog' | undefined;
+  delete (session as any)._abortReason;
+  return reason;
 }
 
 // Tmux info for /session attach

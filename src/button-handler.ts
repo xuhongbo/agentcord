@@ -10,7 +10,6 @@ import {
 import { config } from './config.ts';
 import * as sessions from './session-manager.ts';
 import {
-  handleOutputStream,
   getExpandableContent,
   makeModeButtons,
   setPendingAnswer,
@@ -18,6 +17,7 @@ import {
   clearPendingAnswers,
   getQuestionCount,
 } from './output-handler.ts';
+import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
 import { isUserAllowed, truncate } from './utils.ts';
 
 export async function handleButton(interaction: ButtonInteraction): Promise<void> {
@@ -55,9 +55,8 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.continueSession(sessionId);
       await interaction.editReply('Continuing...');
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionContinue(session, channel);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -95,9 +94,8 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, optionText);
       await interaction.editReply(`Selected option ${optionIndex + 1}`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, optionText);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -187,9 +185,8 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, combined);
       await interaction.editReply(`Submitted answers:\n${combined}`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, combined);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -213,9 +210,8 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, answer);
       await interaction.editReply(`Answered: **${truncate(answer, 100)}**`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -237,9 +233,8 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, answer);
       await interaction.editReply(`Answered: ${answer}`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -250,7 +245,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
   if (customId.startsWith('mode:')) {
     const parts = customId.split(':');
     const sessionId = parts[1];
-    const newMode = parts[2] as 'auto' | 'plan' | 'normal';
+    const newMode = parts[2] as 'auto' | 'plan' | 'normal' | 'monitor';
 
     const session = sessions.getSession(sessionId);
     if (!session) {
@@ -264,6 +259,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       auto: '\u26A1 Auto — full autonomy',
       plan: '\uD83D\uDCCB Plan — plans before changes',
       normal: '\uD83D\uDEE1\uFE0F Normal — asks before destructive ops',
+      monitor: '\uD83E\uDDE0 Monitor — keeps steering toward completion',
     };
 
     await interaction.reply({
@@ -363,9 +359,8 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, selected);
       await interaction.editReply(`Answered: **${truncate(selected, 100)}**`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
@@ -385,9 +380,8 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     await interaction.deferReply();
     try {
       const channel = interaction.channel as TextChannel;
-      const stream = sessions.sendPrompt(sessionId, selected);
       await interaction.editReply(`Selected: ${truncate(selected, 100)}`);
-      await handleOutputStream(stream, channel, sessionId, session.verbose, session.mode, session.provider);
+      await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {
       await interaction.editReply(`Error: ${(err as Error).message}`);
     }
