@@ -96,27 +96,19 @@ WantedBy=default.target
 }
 
 async function install(): Promise<void> {
-  const cwd = process.cwd();
-  const envPath = resolve(cwd, '.env');
-
-  if (!existsSync(envPath)) {
-    p.log.error('No .env file found in the current directory.');
-    p.log.info('Run `agentcord setup` first, then `agentcord daemon install` from the same directory.');
-    return;
-  }
-
+  const workDir = join(homedir(), '.agentcord');
   const isMac = platform() === 'darwin';
 
   if (isMac) {
     const plistPath = getMacPlistPath();
-    const logDir = cwd;
+    const logDir = workDir;
 
     // Unload existing if present
     if (existsSync(plistPath)) {
       try { execSync(`launchctl unload "${plistPath}" 2>/dev/null`); } catch { /* ignore */ }
     }
 
-    const plist = generateMacPlist(cwd, logDir);
+    const plist = generateMacPlist(workDir, logDir);
     writeFileSync(plistPath, plist);
     execSync(`launchctl load "${plistPath}"`);
 
@@ -132,7 +124,7 @@ async function install(): Promise<void> {
       execSync(`mkdir -p "${serviceDir}"`);
     }
 
-    const unit = generateSystemdUnit(cwd);
+    const unit = generateSystemdUnit(workDir);
     writeFileSync(servicePath, unit);
     execSync('systemctl --user daemon-reload');
     execSync(`systemctl --user enable ${SERVICE_NAME}`);
@@ -248,7 +240,7 @@ export async function handleDaemon(subcommand: string | undefined): Promise<void
     agentcord daemon status      Check if the service is running
 
   The service auto-starts on boot and restarts on crash.
-  Run from the directory containing your .env file.
+  Run \x1b[36magentcord config setup\x1b[0m first to configure the bot.
 `);
   }
 }
