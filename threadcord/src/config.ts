@@ -65,7 +65,12 @@ export const config = {
   rateLimitMs: optionalInt('RATE_LIMIT_MS', 1000),
 
   // Codex provider defaults
-  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace') as 'workspace' | 'project' | 'none',
-  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'auto-edit') as 'auto-edit' | 'on-failure' | 'never',
+  // Codex provider
+  // sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
+  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as 'read-only' | 'workspace-write' | 'danger-full-access',
+  // approvalPolicy: 'never' | 'on-request' | 'on-failure' | 'untrusted'
+  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as 'never' | 'on-request' | 'on-failure' | 'untrusted',
   codexNetworkAccessEnabled: optionalBool('CODEX_NETWORK_ACCESS', false),
+  codexWebSearchMode: optional('CODEX_WEB_SEARCH', 'disabled') as 'disabled' | 'cached' | 'live',
+  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '',
 } as const;

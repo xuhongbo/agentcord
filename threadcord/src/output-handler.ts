@@ -455,6 +455,53 @@ export async function handleOutputStream(
           break;
         }
 
+        case 'task_started': {
+          await streamer.finalize();
+          const embed = new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle(`🤖 Subagent started`)
+            .setDescription(truncate(event.description, 300));
+          await channel.send({ embeds: [embed] });
+          break;
+        }
+
+        case 'task_progress': {
+          // Silently track progress — only show if there's a summary
+          if (event.summary) {
+            await streamer.finalize();
+            const embed = new EmbedBuilder()
+              .setColor(0x8e44ad)
+              .setTitle(`🔄 Subagent progress`)
+              .setDescription(truncate(event.summary, 500));
+            if (event.lastToolName) embed.setFooter({ text: `Last: ${event.lastToolName}` });
+            await channel.send({ embeds: [embed] });
+          }
+          break;
+        }
+
+        case 'task_done': {
+          await streamer.finalize();
+          const statusEmoji = event.status === 'completed' ? '✅' : event.status === 'failed' ? '❌' : '⏹️';
+          const embed = new EmbedBuilder()
+            .setColor(event.status === 'completed' ? 0x2ecc71 : 0xe74c3c)
+            .setTitle(`${statusEmoji} Subagent ${event.status}`)
+            .setDescription(truncate(event.summary || 'No summary.', 500));
+          await channel.send({ embeds: [embed] });
+          break;
+        }
+
+        case 'web_search': {
+          if (verbose) {
+            await streamer.finalize();
+            const embed = new EmbedBuilder()
+              .setColor(0x1abc9c)
+              .setTitle(`🔍 Web search`)
+              .setDescription(`\`${truncate(event.query, 200)}\``);
+            await channel.send({ embeds: [embed] });
+          }
+          break;
+        }
+
         case 'tool_start': {
           await streamer.finalize();
           if (verbose) {

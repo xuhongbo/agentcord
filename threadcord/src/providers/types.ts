@@ -22,9 +22,13 @@ export type ProviderEvent =
   | { type: 'tool_result'; toolName: string; result: string; isError?: boolean }
   | { type: 'ask_user'; questionsJson: string }
   | { type: 'task'; action: string; dataJson: string }
+  | { type: 'task_started'; taskId: string; description: string }
+  | { type: 'task_progress'; taskId: string; description: string; lastToolName?: string; summary?: string }
+  | { type: 'task_done'; taskId: string; status: 'completed' | 'failed' | 'stopped'; summary: string }
   | { type: 'image_file'; filePath: string }
   | { type: 'command_execution'; command: string; output: string; exitCode: number | null; status: string }
   | { type: 'file_change'; changes: Array<{ filePath: string; changeKind: 'add' | 'update' | 'delete' }> }
+  | { type: 'web_search'; query: string }
   | { type: 'reasoning'; text: string }
   | { type: 'todo_list'; items: Array<{ text: string; completed: boolean }> }
   | { type: 'session_init'; providerSessionId: string }
@@ -40,6 +44,8 @@ export interface ProviderSessionOptions {
   sandboxMode?: CodexSandboxMode;
   approvalPolicy?: CodexApprovalPolicy;
   networkAccessEnabled?: boolean;
+  webSearchMode?: 'disabled' | 'cached' | 'live';
+  modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   systemPromptParts: string[];
   abortController: AbortController;
 }

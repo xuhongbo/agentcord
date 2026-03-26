@@ -125,6 +125,12 @@ export class CodexProvider implements Provider {
       if (options.networkAccessEnabled !== undefined) {
         threadOptions.networkAccessEnabled = options.networkAccessEnabled;
       }
+      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
+        threadOptions.webSearchMode = options.webSearchMode;
+      }
+      if (options.modelReasoningEffort) {
+        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
+      }
 
       const thread = options.providerSessionId
         ? codex.resumeThread(options.providerSessionId, threadOptions)
@@ -162,6 +168,12 @@ export class CodexProvider implements Provider {
       if (options.approvalPolicy) threadOptions.approvalPolicy = options.approvalPolicy;
       if (options.networkAccessEnabled !== undefined) {
         threadOptions.networkAccessEnabled = options.networkAccessEnabled;
+      }
+      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
+        threadOptions.webSearchMode = options.webSearchMode;
+      }
+      if (options.modelReasoningEffort) {
+        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
       }
       const thread = codex.resumeThread(options.providerSessionId, threadOptions);
       const { events } = await thread.runStreamed('Continue from where you left off.');
@@ -233,7 +245,7 @@ export class CodexProvider implements Provider {
                 yield {
                   type: 'command_execution',
                   command: item.command || '',
-                  output: item.output || '',
+                  output: item.aggregated_output ?? item.output ?? '',
                   exitCode: item.exit_code ?? item.exitCode ?? null,
                   status: item.status || 'completed',
                 };
@@ -241,8 +253,8 @@ export class CodexProvider implements Provider {
 
               case 'file_change': {
                 const changes = (item.changes || item.files || []).map((f: any) => ({
-                  filePath: f.file_path || f.filePath || f.path || '',
-                  changeKind: (f.change_kind || f.changeKind || f.action || 'update') as 'add' | 'update' | 'delete',
+                  filePath: f.path || f.file_path || f.filePath || '',
+                  changeKind: (f.kind || f.change_kind || f.changeKind || 'update') as 'add' | 'update' | 'delete',
                 }));
                 if (changes.length > 0) {
                   yield { type: 'file_change', changes };
@@ -283,6 +295,10 @@ export class CodexProvider implements Provider {
                     isError: item.status === 'failed',
                   };
                 }
+                break;
+
+              case 'web_search':
+                yield { type: 'web_search', query: item.query || '' };
                 break;
 
               case 'error':
