@@ -15,6 +15,19 @@ const getProjectByCategoryIdMock = vi.fn();
 const getProjectMock = vi.fn();
 const updateProjectCategoryMock = vi.fn();
 
+vi.mock('../src/global-config.ts', () => ({
+  getConfigValue: (key: string) => process.env[key],
+  setConfigValue: vi.fn(),
+  deleteConfigValue: vi.fn(),
+  getAllConfig: () => ({}),
+  getConfigPath: () => '/mock/config.json',
+  VALID_KEYS: new Set(['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_GUILD_ID', 'ALLOWED_USERS', 'ALLOW_ALL_USERS', 'CODEX_SANDBOX_MODE', 'CODEX_APPROVAL_POLICY', 'CODEX_NETWORK_ACCESS_ENABLED', 'MESSAGE_RETENTION_DAYS', 'RATE_LIMIT_MS']),
+  SENSITIVE_KEYS: new Set(['DISCORD_TOKEN']),
+  validateConfigValue: () => null,
+  maskSensitive: (_key: string, value: string) => value,
+  _setStoreForTest: vi.fn(),
+}));
+
 vi.mock('../src/session-manager.ts', () => ({
   createSession: createSessionMock,
   listTmuxSessions: listTmuxSessionsMock,
@@ -104,7 +117,6 @@ describe('/session sync codex recovery', () => {
     process.env.DISCORD_CLIENT_ID = '123456789012345678';
     process.env.ALLOW_ALL_USERS = 'true';
     process.env.ALLOWED_USERS = '';
-    process.env.DEFAULT_DIRECTORY = '/tmp/default-project';
   });
 
   afterEach(() => {
@@ -160,10 +172,9 @@ describe('/session sync codex recovery', () => {
     expect(interaction.editReply).toHaveBeenCalledWith('Synced 1 orphaned session(s).');
   });
 
-  it('falls back to default directory when channel topic has no Dir metadata', async () => {
+  it('skips channels with no Dir metadata in topic', async () => {
     getAllSessionsMock.mockReturnValue([]);
     listTmuxSessionsMock.mockResolvedValue([]);
-    createSessionMock.mockResolvedValue({ id: 'orphan', channelId: 'chan-2' });
 
     const codexChannel = {
       id: 'chan-2',
@@ -195,16 +206,8 @@ describe('/session sync codex recovery', () => {
     const { handleSession } = await import('../src/command-handlers.ts');
     await handleSession(interaction as any);
 
-    expect(createSessionMock).toHaveBeenCalledWith(
-      'orphan',
-      '/tmp/default-project',
-      'chan-2',
-      'default-project',
-      'codex',
-      'thr_fallback',
-      { recoverExisting: true },
-    );
-    expect(getOrCreateProjectMock).toHaveBeenCalledWith('default-project', '/tmp/default-project', 'cat-2');
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith('No orphaned sessions found.');
   });
 
   it('applies the requested initial mode when creating a new session', async () => {

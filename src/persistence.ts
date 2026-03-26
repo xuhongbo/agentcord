@@ -1,14 +1,28 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 
-const DATA_DIR = join(process.cwd(), '.discord-friends');
+let dataDirOverride: string | null = null;
+
+function getDataDir(): string {
+  return dataDirOverride ?? join(homedir(), '.agentcord');
+}
+
+/** 仅测试时使用，覆盖数据目录 */
+export function _setDataDirForTest(dir: string | null): void {
+  dataDirOverride = dir;
+}
 
 export class Store<T> {
-  private filePath: string;
+  private readonly filename: string;
 
   constructor(filename: string) {
-    this.filePath = join(DATA_DIR, filename);
+    this.filename = filename;
+  }
+
+  private get filePath(): string {
+    return join(getDataDir(), this.filename);
   }
 
   async read(): Promise<T | null> {
@@ -21,13 +35,14 @@ export class Store<T> {
   }
 
   async write(data: T): Promise<void> {
-    const dir = dirname(this.filePath);
+    const filePath = this.filePath;
+    const dir = dirname(filePath);
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true });
     }
 
-    const tmpPath = this.filePath + '.tmp';
+    const tmpPath = filePath + '.tmp';
     await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-    await rename(tmpPath, this.filePath);
+    await rename(tmpPath, filePath);
   }
 }

@@ -216,7 +216,14 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
       const project = projectMgr.getProjectByCategoryId(parentId);
       if (project) directory = project.directory;
     }
-    directory = directory || config.defaultDirectory;
+  }
+
+  if (!directory) {
+    await interaction.reply({
+      content: 'No project directory found. Use `agentcord project init` to register a project, or specify a `directory` option.',
+      ephemeral: true,
+    });
+    return;
   }
 
   await interaction.deferReply();
@@ -441,7 +448,14 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
   const provider = (interaction.options.getString('provider') || 'claude') as ProviderName;
   const mode = resolveRequestedMode(interaction);
   const codexOptions = resolveCodexSessionOptions(interaction, provider);
-  const directory = interaction.options.getString('directory') || config.defaultDirectory;
+  const directory = interaction.options.getString('directory');
+  if (!directory) {
+    await interaction.reply({
+      content: 'No project directory specified. Use the `directory` option.',
+      ephemeral: true,
+    });
+    return;
+  }
 
   // Only validate UUID format for Claude sessions
   if (provider === 'claude') {
@@ -699,7 +713,8 @@ async function handleSessionSync(interaction: ChatInputCommandInteraction): Prom
 
     const provider = m[1] as ProviderName;
     const sessionName = m[2];
-    const directory = parseTopicDirectory(ch.topic) || config.defaultDirectory;
+    const directory = parseTopicDirectory(ch.topic);
+    if (!directory) continue; // skip channels without directory metadata
     const providerSessionId = parseTopicProviderSessionId(ch.topic);
     const projectName = projectNameFromDir(directory);
 

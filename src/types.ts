@@ -171,8 +171,6 @@ export interface Config {
   guildId: string | null;
   allowedUsers: string[];
   allowAllUsers: boolean;
-  allowedPaths: string[];
-  defaultDirectory: string;
   messageRetentionDays: number | null;
   rateLimitMs: number;
   codexSandboxMode?: CodexSandboxMode;

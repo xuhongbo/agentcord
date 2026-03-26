@@ -1,12 +1,12 @@
-import 'dotenv/config';
 import type { Config } from './types.ts';
 import type { CodexApprovalPolicy, CodexSandboxMode } from './providers/types.ts';
+import { getConfigValue } from './global-config.ts';
 
-function getEnvOrExit(name: string): string {
-  const value = process.env[name];
+function getRequired(key: string): string {
+  const value = getConfigValue(key);
   if (!value) {
-    console.error(`ERROR: ${name} environment variable is required`);
-    console.error('Set it in your .env file or export it before running');
+    console.error(`ERROR: ${key} is not configured.`);
+    console.error('Run \x1b[36magentcord config setup\x1b[0m to configure.');
     process.exit(1);
   }
   return value;
@@ -56,22 +56,20 @@ function parseBoolean(name: string, value: string | undefined): boolean | undefi
 }
 
 export const config: Config = {
-  token: getEnvOrExit('DISCORD_TOKEN'),
-  clientId: getEnvOrExit('DISCORD_CLIENT_ID'),
-  guildId: process.env.DISCORD_GUILD_ID || null,
-  allowedUsers: process.env.ALLOWED_USERS?.split(',').map(id => id.trim()).filter(Boolean) || [],
-  allowAllUsers: process.env.ALLOW_ALL_USERS === 'true',
-  allowedPaths: process.env.ALLOWED_PATHS?.split(',').map(p => p.trim()).filter(Boolean) || [],
-  defaultDirectory: process.env.DEFAULT_DIRECTORY || process.cwd(),
-  messageRetentionDays: process.env.MESSAGE_RETENTION_DAYS
-    ? parseInt(process.env.MESSAGE_RETENTION_DAYS, 10)
+  token: getRequired('DISCORD_TOKEN'),
+  clientId: getRequired('DISCORD_CLIENT_ID'),
+  guildId: getConfigValue('DISCORD_GUILD_ID') ?? null,
+  allowedUsers: getConfigValue('ALLOWED_USERS')?.split(',').map(id => id.trim()).filter(Boolean) ?? [],
+  allowAllUsers: getConfigValue('ALLOW_ALL_USERS') === 'true',
+  messageRetentionDays: getConfigValue('MESSAGE_RETENTION_DAYS')
+    ? parseInt(getConfigValue('MESSAGE_RETENTION_DAYS')!, 10)
     : null,
-  rateLimitMs: process.env.RATE_LIMIT_MS
-    ? parseInt(process.env.RATE_LIMIT_MS, 10)
+  rateLimitMs: getConfigValue('RATE_LIMIT_MS')
+    ? parseInt(getConfigValue('RATE_LIMIT_MS')!, 10)
     : 1000,
-  codexSandboxMode: parseCodexSandboxMode(process.env.CODEX_SANDBOX_MODE),
-  codexApprovalPolicy: parseCodexApprovalPolicy(process.env.CODEX_APPROVAL_POLICY),
-  codexNetworkAccessEnabled: parseBoolean('CODEX_NETWORK_ACCESS_ENABLED', process.env.CODEX_NETWORK_ACCESS_ENABLED),
+  codexSandboxMode: parseCodexSandboxMode(getConfigValue('CODEX_SANDBOX_MODE')),
+  codexApprovalPolicy: parseCodexApprovalPolicy(getConfigValue('CODEX_APPROVAL_POLICY')),
+  codexNetworkAccessEnabled: parseBoolean('CODEX_NETWORK_ACCESS_ENABLED', getConfigValue('CODEX_NETWORK_ACCESS_ENABLED')),
 };
 
 if (config.allowedUsers.length > 0) {
@@ -81,10 +79,6 @@ if (config.allowedUsers.length > 0) {
 } else {
   console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
   process.exit(1);
-}
-
-if (config.allowedPaths.length > 0) {
-  console.log(`Path restrictions: ${config.allowedPaths.join(', ')}`);
 }
 
 if (config.messageRetentionDays) {

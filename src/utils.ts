@@ -36,15 +36,6 @@ export function formatLastActivity(timestamp: number): string {
   return 'just now';
 }
 
-export function isPathAllowed(targetPath: string, allowedPaths: string[]): boolean {
-  if (allowedPaths.length === 0) return true;
-  const resolved = resolve(targetPath);
-  return allowedPaths.some(allowed => {
-    const resolvedAllowed = resolve(allowed.startsWith('~') ? allowed.replace('~', homedir()) : allowed);
-    return resolved === resolvedAllowed || resolved.startsWith(resolvedAllowed + '/');
-  });
-}
-
 export function resolvePath(dir: string): string {
   const expanded = dir.startsWith('~') ? dir.replace('~', homedir()) : dir;
   return resolve(expanded);
