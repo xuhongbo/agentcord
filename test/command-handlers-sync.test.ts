@@ -157,8 +157,7 @@ describe('/session sync codex recovery', () => {
       { recoverExisting: true },
     );
     expect(getOrCreateProjectMock).toHaveBeenCalledWith('work-repo', '/tmp/work-repo', 'cat-1');
-    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining('Synced 1 orphaned session(s)'));
-    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining('(1 channel)'));
+    expect(interaction.editReply).toHaveBeenCalledWith('Synced 1 orphaned session(s).');
   });
 
   it('falls back to default directory when channel topic has no Dir metadata', async () => {
@@ -214,7 +213,6 @@ describe('/session sync codex recovery', () => {
     createSessionMock.mockResolvedValue({
       id: 'bench-run',
       directory: '/tmp/work-repo',
-      tmuxName: '',
       mode: 'auto',
     });
 

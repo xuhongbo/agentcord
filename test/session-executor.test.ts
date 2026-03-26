@@ -36,7 +36,6 @@ function makeSession(): Session {
     directory: '/tmp/project',
     projectName: 'project',
     provider: 'codex',
-    tmuxName: '',
     verbose: false,
     mode: 'monitor',
     workflowState: {

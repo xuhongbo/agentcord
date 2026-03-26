@@ -102,9 +102,9 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
         .addIntegerOption(opt =>
           opt.setName('lines').setDescription('Number of lines (default 50)').setMinValue(1).setMaxValue(500)))
     .addSubcommand(sub =>
-      sub.setName('attach').setDescription('Show tmux attach command for terminal access'))
+      sub.setName('attach').setDescription('Show command to resume session in terminal'))
     .addSubcommand(sub =>
-      sub.setName('sync').setDescription('Reconnect orphaned sessions (tmux + provider channels)'))
+      sub.setName('sync').setDescription('Reconnect orphaned provider channels'))
     .addSubcommand(sub =>
       sub.setName('model')
         .setDescription('Change the model for this session')

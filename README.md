@@ -2,7 +2,7 @@
 
 Run and manage AI coding agent sessions on your machine through Discord. Supports [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and OpenAI Codex.
 
-Each session gets a Discord channel for chatting with the agent and a tmux session for direct terminal access. Sessions are organized by project — create multiple sessions in the same codebase, each with their own channel.
+Each session gets a Discord channel for chatting with the agent. Sessions are organized by project — create multiple sessions in the same codebase, each with their own channel.
 
 ## Quick Start
 
@@ -18,7 +18,6 @@ The setup wizard walks you through creating a Discord app, configuring the bot t
 ## Requirements
 
 - **Node.js 22.6+** (uses native TypeScript execution)
-- **tmux** (for terminal session access)
 - **Claude Code** installed on the machine (`@anthropic-ai/claude-agent-sdk`)
 - **OpenAI Codex SDK** for Codex sessions (`@openai/codex-sdk`)
 
@@ -30,7 +29,7 @@ Discord message → SDK query() → coding agent
 Discord embeds ← stream processing ← async iterator
 ```
 
-**Hybrid architecture**: The agent SDK handles structured streaming for Discord interaction, while each session also gets a tmux session. You can `tmux attach` and run `claude --resume <session-id>` to take over the same conversation in your terminal.
+The agent SDK handles structured streaming for Discord interaction. You can also resume sessions in your terminal using `claude --resume <session-id>` or `codex --resume <session-id>`.
 
 **Project-based organization**:
 
@@ -51,15 +50,15 @@ Discord Server
 
 | Command | Description |
 |---------|-------------|
-| `/claude new <name> [directory]` | Create a session with a Discord channel + tmux session |
-| `/claude list` | List active sessions grouped by project |
-| `/claude end` | End the session in the current channel |
-| `/claude continue` | Continue the conversation |
-| `/claude stop` | Abort current generation |
-| `/claude attach` | Show tmux attach command for terminal access |
-| `/claude model <model>` | Change model for the session |
-| `/claude verbose` | Toggle tool call/result visibility |
-| `/claude sync` | Reconnect orphaned sessions (tmux + existing provider channels, including Codex) |
+| `/session new <name> [directory]` | Create a session with a Discord channel |
+| `/session list` | List active sessions grouped by project |
+| `/session end` | End the session in the current channel |
+| `/session continue` | Continue the conversation |
+| `/session stop` | Abort current generation |
+| `/session attach` | Show command to resume session in terminal |
+| `/session model <model>` | Change model for the session |
+| `/session verbose` | Toggle tool call/result visibility |
+| `/session sync` | Reconnect orphaned provider channels |
 
 ### Shell
 
@@ -102,7 +101,7 @@ Discord Server
 - **Per-project customization** — System prompts, skills, and MCP servers scoped to projects
 - **Agent personas** — Switch between specialized roles (code reviewer, architect, etc.)
 - **Session persistence** — Sessions survive bot restarts
-- **Terminal access** — `tmux attach` to any session for direct CLI use
+- **Terminal access** — Resume any session in your terminal with the provider CLI
 
 ## Configuration
 

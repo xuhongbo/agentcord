@@ -1,18 +1,25 @@
 import { existsSync } from 'node:fs';
-import { ensureProvider, type ProviderEvent, type ProviderName, type ContentBlock } from './providers/index.ts';
-import type { CodexApprovalPolicy, CodexSandboxMode } from './providers/types.ts';
+import { ensureProvider, type ProviderEvent, type ContentBlock } from './providers/index.ts';
 import { Store } from './persistence.ts';
 import { getAgent } from './agents.ts';
 import { getPersonality } from './project-manager.ts';
-import { sanitizeSessionName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
-import type { Session, SessionPersistData, SessionMode, SessionWorkflowState } from './types.ts';
+import { sanitizeName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
+import type {
+  ThreadSession,
+  SessionPersistData,
+  SessionMode,
+  SessionWorkflowState,
+  ProviderName,
+} from './types.ts';
 import { config } from './config.ts';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const MODE_PROMPTS: Record<SessionMode, string> = {
   auto: '',
   plan: 'You MUST use EnterPlanMode at the start of every task. Present your plan for user approval before making any code changes. Do not write or edit files until the user approves the plan.',
   normal: 'Before performing destructive or significant operations (deleting files, running dangerous commands, making large refactors, writing to many files), use AskUserQuestion to confirm with the user first. Ask for explicit approval before proceeding with changes.',
-  monitor: 'This session is running in monitored autonomy mode. Treat the active user request as the task objective and keep working until it is fully satisfied. Do not stop at a partial implementation or ask the user for follow-up direction unless you are truly blocked by missing permissions, credentials, or required external information that you cannot obtain yourself. When you believe the task is complete, explain concretely what was finished and why it satisfies the request.',
+  monitor: 'This session is running in monitored autonomy mode. Treat the active user request as the task objective and keep working until it is fully satisfied. Do not stop at a partial implementation or ask the user for follow-up direction unless you are truly blocked by missing permissions, credentials, or required external information that you cannot obtain yourself. When you believe the task is complete, explain concisely what was finished and why it satisfies the request.',
 };
 
 const MONITOR_SYSTEM_PROMPT = `You are a monitor agent supervising another coding agent.
@@ -35,11 +42,20 @@ Rules:
 - Use "blocked" only for true blockers the worker cannot resolve autonomously.
 - Never ask the human for optional next steps.
 - Output valid JSON and nothing else.`;
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+
 const sessionStore = new Store<SessionPersistData[]>('sessions.json');
 
-const sessions = new Map<string, Session>();
-const channelToSession = new Map<string, string>();
+// channelId (the session's own Discord channel or thread ID) → ThreadSession
+const sessions = new Map<string, ThreadSession>();
+
+// internal session id → channelId
+const idToChannelId = new Map<string, string>();
+
 let saveQueue: Promise<void> = Promise.resolve();
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function createDefaultWorkflowState(): SessionWorkflowState {
   return {
@@ -49,73 +65,72 @@ function createDefaultWorkflowState(): SessionWorkflowState {
   };
 }
 
-
-function isPlaceholderChannelId(channelId: string | undefined): boolean {
-  return !channelId || channelId === 'pending';
-}
-
-// Persistence
+// ─── Persistence ──────────────────────────────────────────────────────────────
 
 export async function loadSessions(): Promise<void> {
-  const data = await sessionStore.read();
+  const data = sessionStore.read();
   if (!data) return;
 
   let cleaned = false;
+
   for (const s of data) {
-    if (isPlaceholderChannelId(s.channelId)) {
+    // Skip sessions from old architecture (no categoryId) — incompatible format
+    if (!s.categoryId) {
       cleaned = true;
-      console.warn(`Skipping invalid persisted session "${s.id}" (missing channel ID).`);
+      console.warn(`Skipping legacy session "${s.id}" (no categoryId — old architecture).`);
       continue;
     }
-    if (channelToSession.has(s.channelId)) {
+    if (!s.channelId) {
       cleaned = true;
-      console.warn(`Skipping duplicate persisted session "${s.id}" (channel ${s.channelId} already linked).`);
+      console.warn(`Skipping invalid persisted session "${s.id}" (missing channelId).`);
+      continue;
+    }
+    if (sessions.has(s.channelId)) {
+      cleaned = true;
+      console.warn(`Skipping duplicate persisted session "${s.id}" (channelId ${s.channelId} already loaded).`);
       continue;
     }
 
-    // Migration: handle old claudeSessionId field and missing provider
     const provider: ProviderName = s.provider ?? 'claude';
-    const providerSessionId = s.providerSessionId ?? (s as any).claudeSessionId;
 
-    sessions.set(s.id, {
+    sessions.set(s.channelId, {
       ...s,
       provider,
-      providerSessionId,
       verbose: s.verbose ?? false,
       mode: s.mode ?? 'auto',
-      monitorGoal: s.monitorGoal,
-      monitorProviderSessionId: s.monitorProviderSessionId,
+      subagentDepth: s.subagentDepth ?? 0,
+      type: s.type ?? 'persistent',
       workflowState: s.workflowState ?? createDefaultWorkflowState(),
       isGenerating: false,
     });
-    channelToSession.set(s.channelId, s.id);
+    idToChannelId.set(s.id, s.channelId);
   }
 
   if (cleaned) {
     await saveSessions();
   }
 
-  console.log(`Restored ${sessions.size} session(s)`);
+  console.log(`[session-manager] Restored ${sessions.size} session(s)`);
 }
 
 async function persistSessionsNow(): Promise<void> {
   const data: SessionPersistData[] = [];
   for (const [, s] of sessions) {
-    if (isPlaceholderChannelId(s.channelId)) continue;
     data.push({
       id: s.id,
       channelId: s.channelId,
-      directory: s.directory,
+      categoryId: s.categoryId,
       projectName: s.projectName,
+      agentLabel: s.agentLabel,
       provider: s.provider,
       providerSessionId: s.providerSessionId,
-      model: s.model,
-      sandboxMode: s.sandboxMode,
-      approvalPolicy: s.approvalPolicy,
-      networkAccessEnabled: s.networkAccessEnabled,
+      type: s.type,
+      parentChannelId: s.parentChannelId,
+      subagentDepth: s.subagentDepth,
+      directory: s.directory,
+      mode: s.mode !== 'auto' ? s.mode : undefined as unknown as SessionMode,
       agentPersona: s.agentPersona,
-      verbose: s.verbose || undefined,
-      mode: s.mode !== 'auto' ? s.mode : undefined,
+      verbose: s.verbose || false,
       monitorGoal: s.monitorGoal,
       monitorProviderSessionId: s.monitorProviderSessionId,
       workflowState: s.workflowState,
@@ -125,7 +140,7 @@ async function persistSessionsNow(): Promise<void> {
       totalCost: s.totalCost,
     });
   }
-  await sessionStore.write(data);
+  sessionStore.write(data);
 }
 
 function saveSessions(): Promise<void> {
@@ -135,38 +150,41 @@ function saveSessions(): Promise<void> {
       try {
         await persistSessionsNow();
       } catch (err: unknown) {
-        console.error(`Failed to persist sessions: ${(err as Error).message}`);
+        console.error(`[session-manager] Failed to persist sessions: ${(err as Error).message}`);
       }
     });
   return saveQueue;
 }
 
-export interface CreateSessionOptions {
-  sandboxMode?: CodexSandboxMode;
-  approvalPolicy?: CodexApprovalPolicy;
-  networkAccessEnabled?: boolean;
-  recoverExisting?: boolean;
+// ─── Create / CRUD ────────────────────────────────────────────────────────────
+
+export interface CreateSessionParams {
+  channelId: string;             // Session's own Discord channel (TextChannel) or thread ID
+  categoryId: string;            // Parent project category ID
+  projectName: string;
+  agentLabel: string;
+  provider: ProviderName;
+  directory: string;
+  type: 'persistent' | 'subagent';
+  parentChannelId?: string;      // For subagents: parent session's TextChannel ID
+  subagentDepth?: number;
+  mode?: SessionMode;
 }
 
-// Session CRUD
+export async function createSession(params: CreateSessionParams): Promise<ThreadSession> {
+  const {
+    channelId,
+    categoryId,
+    projectName,
+    agentLabel,
+    provider,
+    type,
+    parentChannelId,
+    subagentDepth = 0,
+    mode = config.defaultMode,
+  } = params;
 
-export async function createSession(
-  name: string,
-  directory: string,
-  channelId: string,
-  projectName: string,
-  provider: ProviderName = 'claude',
-  providerSessionId?: string,
-  options: CreateSessionOptions = {},
-): Promise<Session> {
-  const resolvedDir = resolvePath(directory);
-  const effectiveOptions: CreateSessionOptions = provider === 'codex'
-    ? {
-        sandboxMode: options.sandboxMode ?? config.codexSandboxMode,
-        approvalPolicy: options.approvalPolicy ?? config.codexApprovalPolicy,
-        networkAccessEnabled: options.networkAccessEnabled ?? config.codexNetworkAccessEnabled,
-      }
-    : options;
+  const resolvedDir = resolvePath(params.directory);
 
   if (!isPathAllowed(resolvedDir, config.allowedPaths)) {
     throw new Error(`Directory not in allowed paths: ${resolvedDir}`);
@@ -175,35 +193,35 @@ export async function createSession(
     throw new Error(`Directory does not exist: ${resolvedDir}`);
   }
 
-  // Validate the provider is available
   await ensureProvider(provider);
 
-  // Auto-deduplicate: append -2, -3, etc. if name is taken
-  let id = sanitizeSessionName(name);
-  if (options.recoverExisting) {
-    if (sessions.has(id)) {
-      throw new Error(`Session "${id}" already exists`);
-    }
-  } else {
-    let suffix = 1;
-    while (sessions.has(id)) {
-      suffix++;
-      id = sanitizeSessionName(`${name}-${suffix}`);
-    }
+  if (sessions.has(channelId)) {
+    throw new Error(`Session for channelId "${channelId}" already exists`);
   }
 
-  const session: Session = {
+  // Derive a unique internal ID from the agentLabel (auto-deduplicate)
+  let id = sanitizeName(agentLabel);
+  let suffix = 1;
+  while (idToChannelId.has(id)) {
+    suffix++;
+    id = sanitizeName(`${agentLabel}-${suffix}`);
+  }
+
+  const session: ThreadSession = {
     id,
     channelId,
-    directory: resolvedDir,
+    categoryId,
     projectName,
+    agentLabel,
     provider,
-    providerSessionId,
-    sandboxMode: effectiveOptions.sandboxMode,
-    approvalPolicy: effectiveOptions.approvalPolicy,
-    networkAccessEnabled: effectiveOptions.networkAccessEnabled,
+    providerSessionId: undefined,
+    type,
+    parentChannelId,
+    subagentDepth,
+    directory: resolvedDir,
+    mode,
+    agentPersona: undefined,
     verbose: false,
-    mode: 'auto',
     monitorGoal: undefined,
     monitorProviderSessionId: undefined,
     workflowState: createDefaultWorkflowState(),
@@ -214,98 +232,58 @@ export async function createSession(
     totalCost: 0,
   };
 
-  sessions.set(id, session);
-  if (!isPlaceholderChannelId(channelId)) {
-    channelToSession.set(channelId, id);
-    await saveSessions();
-  }
+  sessions.set(channelId, session);
+  idToChannelId.set(id, channelId);
+  await saveSessions();
 
   return session;
 }
 
-export function getSession(id: string): Session | undefined {
-  return sessions.get(id);
+export function getSession(id: string): ThreadSession | undefined {
+  const channelId = idToChannelId.get(id);
+  return channelId ? sessions.get(channelId) : undefined;
 }
 
-export function getSessionByChannel(channelId: string): Session | undefined {
-  const id = channelToSession.get(channelId);
-  return id ? sessions.get(id) : undefined;
+/** Look up a session by its Discord channel or thread ID. */
+export function getSessionByChannel(channelId: string): ThreadSession | undefined {
+  return sessions.get(channelId);
 }
 
-export function getAllSessions(): Session[] {
+/** Backward-compat alias (subagent sessions are still threads). */
+export const getSessionByThread = getSessionByChannel;
+
+/** List all sessions under a project category. */
+export function getSessionsByCategory(categoryId: string): ThreadSession[] {
+  const result: ThreadSession[] = [];
+  for (const [, session] of sessions) {
+    if (session.categoryId === categoryId) {
+      result.push(session);
+    }
+  }
+  return result;
+}
+
+export function getAllSessions(): ThreadSession[] {
   return Array.from(sessions.values());
 }
 
 export async function endSession(id: string): Promise<void> {
-  const session = sessions.get(id);
+  const session = getSession(id);
   if (!session) throw new Error(`Session "${id}" not found`);
 
-  // Abort if generating
   if (session.isGenerating && (session as any)._controller) {
     (session as any)._controller.abort();
   }
 
-  if (!isPlaceholderChannelId(session.channelId)) {
-    channelToSession.delete(session.channelId);
-  }
-  sessions.delete(id);
+  idToChannelId.delete(session.id);
+  sessions.delete(session.channelId);
   await saveSessions();
 }
 
-export async function linkChannel(sessionId: string, channelId: string): Promise<void> {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error(`Session "${sessionId}" not found`);
-  }
-
-  if (!isPlaceholderChannelId(session.channelId)) {
-    channelToSession.delete(session.channelId);
-  }
-  session.channelId = channelId;
-  channelToSession.set(channelId, sessionId);
-  await saveSessions();
-}
-
-export async function unlinkChannel(channelId: string): Promise<void> {
-  let sessionId = channelToSession.get(channelId);
-  if (!sessionId) {
-    for (const [id, session] of sessions) {
-      if (session.channelId === channelId) {
-        sessionId = id;
-        break;
-      }
-    }
-  }
-
-  if (!sessionId) return;
-
-  channelToSession.delete(channelId);
-  sessions.delete(sessionId);
-  await saveSessions();
-}
-
-// Model management
-
-export function setModel(sessionId: string, model: string): void {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.model = model;
-    saveSessions();
-  }
-}
-
-// Agent persona management
-
-export function setVerbose(sessionId: string, verbose: boolean): void {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.verbose = verbose;
-    saveSessions();
-  }
-}
+// ─── State management ─────────────────────────────────────────────────────────
 
 export function setMode(sessionId: string, mode: SessionMode): void {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (session) {
     session.mode = mode;
     if (mode === 'monitor') {
@@ -316,8 +294,32 @@ export function setMode(sessionId: string, mode: SessionMode): void {
   }
 }
 
+export function setVerbose(sessionId: string, verbose: boolean): void {
+  const session = getSession(sessionId);
+  if (session) {
+    session.verbose = verbose;
+    saveSessions();
+  }
+}
+
+export function setModel(sessionId: string, model: string): void {
+  const session = getSession(sessionId);
+  if (session) {
+    (session as any).model = model;
+    saveSessions();
+  }
+}
+
+export function setAgentPersona(sessionId: string, persona: string | undefined): void {
+  const session = getSession(sessionId);
+  if (session) {
+    session.agentPersona = persona;
+    saveSessions();
+  }
+}
+
 export function setMonitorGoal(sessionId: string, goal: string | undefined): void {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (session) {
     session.monitorGoal = goal;
     if (!goal) {
@@ -332,15 +334,12 @@ export function updateWorkflowState(
   sessionId: string,
   patch: Partial<SessionWorkflowState> | ((current: SessionWorkflowState) => SessionWorkflowState),
 ): void {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) return;
 
   const next = typeof patch === 'function'
     ? patch(session.workflowState)
-    : {
-        ...session.workflowState,
-        ...patch,
-      };
+    : { ...session.workflowState, ...patch };
 
   session.workflowState = {
     ...next,
@@ -350,26 +349,18 @@ export function updateWorkflowState(
 }
 
 export function resetWorkflowState(sessionId: string): void {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) return;
   session.workflowState = createDefaultWorkflowState();
   saveSessions();
 }
 
-export function setAgentPersona(sessionId: string, persona: string | undefined): void {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.agentPersona = persona;
-    saveSessions();
-  }
-}
+// ─── System prompt building ───────────────────────────────────────────────────
 
-// Build system prompt parts from project personality + agent persona + mode
-
-function buildSystemPromptParts(session: Session): string[] {
+function buildSystemPromptParts(session: ThreadSession): string[] {
   const parts: string[] = [];
 
-  const personality = getPersonality(session.projectName);
+  const personality = getPersonality(session.categoryId);
   if (personality) parts.push(personality);
 
   if (session.agentPersona) {
@@ -383,31 +374,23 @@ function buildSystemPromptParts(session: Session): string[] {
   return parts;
 }
 
-function buildMonitorSystemPromptParts(session: Session): string[] {
+function buildMonitorSystemPromptParts(session: ThreadSession): string[] {
   const parts: string[] = [];
 
-  const personality = getPersonality(session.projectName);
+  const personality = getPersonality(session.categoryId);
   if (personality) parts.push(personality);
 
   parts.push(MONITOR_SYSTEM_PROMPT);
   return parts;
 }
 
-export function resetProviderSession(sessionId: string): void {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.providerSessionId = undefined;
-    saveSessions();
-  }
-}
-
-// Provider-delegated prompt sending
+// ─── Provider-delegated prompt sending ───────────────────────────────────────
 
 export async function* sendPrompt(
   sessionId: string,
   prompt: string | ContentBlock[],
 ): AsyncGenerator<ProviderEvent> {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
   if (session.isGenerating) throw new Error('Session is already generating');
 
@@ -423,21 +406,16 @@ export async function* sendPrompt(
     const stream = provider.sendPrompt(prompt, {
       directory: session.directory,
       providerSessionId: session.providerSessionId,
-      model: session.model,
-      sandboxMode: session.sandboxMode,
-      approvalPolicy: session.approvalPolicy,
-      networkAccessEnabled: session.networkAccessEnabled,
+      model: (session as any).model,
       systemPromptParts,
       abortController: controller,
     });
 
     for await (const event of stream) {
-      // Capture provider session ID
       if (event.type === 'session_init') {
         session.providerSessionId = event.providerSessionId || undefined;
         await saveSessions();
       }
-      // Track cost
       if (event.type === 'result') {
         session.totalCost += event.costUsd;
       }
@@ -447,7 +425,7 @@ export async function* sendPrompt(
     session.messageCount++;
   } catch (err: unknown) {
     if (isAbortError(err)) {
-      // User cancelled — that's fine
+      // User cancelled — expected
     } else {
       throw err;
     }
@@ -462,7 +440,7 @@ export async function* sendPrompt(
 export async function* continueSession(
   sessionId: string,
 ): AsyncGenerator<ProviderEvent> {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
   if (session.isGenerating) throw new Error('Session is already generating');
 
@@ -478,10 +456,7 @@ export async function* continueSession(
     const stream = provider.continueSession({
       directory: session.directory,
       providerSessionId: session.providerSessionId,
-      model: session.model,
-      sandboxMode: session.sandboxMode,
-      approvalPolicy: session.approvalPolicy,
-      networkAccessEnabled: session.networkAccessEnabled,
+      model: (session as any).model,
       systemPromptParts,
       abortController: controller,
     });
@@ -516,7 +491,7 @@ export async function* sendMonitorPrompt(
   sessionId: string,
   prompt: string,
 ): AsyncGenerator<ProviderEvent> {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
 
   const provider = await ensureProvider(session.provider);
@@ -526,10 +501,7 @@ export async function* sendMonitorPrompt(
   const stream = provider.sendPrompt(prompt, {
     directory: session.directory,
     providerSessionId: session.monitorProviderSessionId,
-    model: session.model,
-    sandboxMode: session.sandboxMode,
-    approvalPolicy: session.approvalPolicy,
-    networkAccessEnabled: session.networkAccessEnabled,
+    model: (session as any).model,
     systemPromptParts,
     abortController: new AbortController(),
   });
@@ -549,42 +521,37 @@ export async function* sendMonitorPrompt(
   await saveSessions();
 }
 
+// ─── Abort management ─────────────────────────────────────────────────────────
+
 export function abortSession(sessionId: string): boolean {
   return abortSessionWithReason(sessionId, 'user');
 }
 
 export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watchdog'): boolean {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) return false;
+
   const controller = (session as any)._controller as AbortController | undefined;
   (session as any)._abortReason = reason;
+
   if (controller) {
     controller.abort();
   }
-  // Force-clear generating state — the SDK may not throw AbortError reliably
+
   if (session.isGenerating) {
     session.isGenerating = false;
     delete (session as any)._controller;
     saveSessions();
     return true;
   }
+
   return !!controller;
 }
 
 export function consumeAbortReason(sessionId: string): 'user' | 'watchdog' | undefined {
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) return undefined;
   const reason = (session as any)._abortReason as 'user' | 'watchdog' | undefined;
   delete (session as any)._abortReason;
   return reason;
-}
-
-// Session info for /session attach
-
-export function getAttachInfo(sessionId: string): { sessionId?: string } | null {
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  return {
-    sessionId: session.providerSessionId,
-  };
 }

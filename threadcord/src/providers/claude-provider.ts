@@ -218,6 +218,33 @@ export class ClaudeProvider implements Provider {
         }
       }
 
+      // Task lifecycle messages (internal subagents spawned by Claude)
+      if (message.type === 'system') {
+        const sub = (message as any).subtype;
+        if (sub === 'task_started') {
+          yield {
+            type: 'task_started',
+            taskId: (message as any).task_id || '',
+            description: (message as any).description || '',
+          };
+        } else if (sub === 'task_progress') {
+          yield {
+            type: 'task_progress',
+            taskId: (message as any).task_id || '',
+            description: (message as any).description || '',
+            lastToolName: (message as any).last_tool_name,
+            summary: (message as any).summary,
+          };
+        } else if (sub === 'task_notification') {
+          yield {
+            type: 'task_done',
+            taskId: (message as any).task_id || '',
+            status: (message as any).status || 'completed',
+            summary: (message as any).summary || '',
+          };
+        }
+      }
+
       // Result message
       if (message.type === 'result') {
         const r = message as any;
