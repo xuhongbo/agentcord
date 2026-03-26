@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  EmbedBuilder,
   type Message,
   type TextChannel,
   type AnyThreadChannel,
@@ -135,4 +136,16 @@ export async function handleMessage(message: Message): Promise<void> {
   await executeSessionPrompt(session, channel as SessionChannel, blocks.length === 1 && blocks[0].type === 'text'
     ? (blocks[0] as { type: 'text'; text: string }).text
     : blocks);
+
+  // After a subagent finishes, notify the parent session channel
+  if (session.type === 'subagent' && session.parentChannelId && message.guild) {
+    const parentChannel = message.guild.channels.cache.get(session.parentChannelId) as TextChannel | undefined;
+    if (parentChannel?.isTextBased() && !parentChannel.isThread()) {
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle(`✅ Subagent Finished: ${session.agentLabel}`)
+        .setDescription(`<#${session.channelId}> has completed a pass. Review the thread for output.`);
+      await parentChannel.send({ embeds: [embed] }).catch(() => {});
+    }
+  }
 }
