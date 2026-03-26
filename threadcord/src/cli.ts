@@ -31,10 +31,18 @@ threadcord setup
    threadcord start
    # or: node dist/cli.js
 
-Bot setup in Discord:
-  • Create a project channel: run /project setup in any text channel
-  • Spawn agents: run /agent spawn <label> in the project channel
-  • Chat with agents: send messages inside the created thread
+Discord structure:
+  Server
+  └─ Category  ← represents one project/repo  (/project setup here)
+     ├─ #history  ← Forum, auto-created for archived sessions
+     └─ #claude-feature-x  ← session channel  (/agent spawn)
+        └─ [sub:claude] worker  ← Thread for subagent  (/subagent run)
+
+Quick start in Discord:
+  1. Create a Category in your server (right-click > Create Category)
+  2. Create any text channel inside it, then run /project setup
+  3. Run /agent spawn label:my-task to create a session channel
+  4. Open the new channel and start chatting with the agent
 `);
 } else {
   // Check .env exists
