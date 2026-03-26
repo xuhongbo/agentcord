@@ -75,4 +75,7 @@ export const config = {
   // Codex API proxy (OpenAI-compatible base URL)
   codexBaseUrl: optional('CODEX_BASE_URL', ''),
   codexApiKey: optional('CODEX_API_KEY', ''),
+  // Path to locally installed codex binary (e.g. /usr/local/bin/codex)
+  // If unset, the SDK uses its own bundled binary from npm optional deps
+  codexPath: optional('CODEX_PATH', ''),
 } as const;

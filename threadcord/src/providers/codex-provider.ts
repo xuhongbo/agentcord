@@ -117,6 +117,7 @@ export class CodexProvider implements Provider {
       const codexOpts: Record<string, any> = {};
       if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
       if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
       const codex = new Codex(codexOpts);
 
       const threadOptions: Record<string, any> = {
@@ -165,6 +166,7 @@ export class CodexProvider implements Provider {
       const codexOpts: Record<string, any> = {};
       if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
       if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
       const codex = new Codex(codexOpts);
       const threadOptions: Record<string, any> = {
         workingDirectory: options.directory,
