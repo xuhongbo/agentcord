@@ -65,7 +65,6 @@ export const config = {
   rateLimitMs: optionalInt('RATE_LIMIT_MS', 1000),
 
   // Codex provider defaults
-  // Codex provider
   // sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
   codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as 'read-only' | 'workspace-write' | 'danger-full-access',
   // approvalPolicy: 'never' | 'on-request' | 'on-failure' | 'untrusted'
@@ -73,4 +72,7 @@ export const config = {
   codexNetworkAccessEnabled: optionalBool('CODEX_NETWORK_ACCESS', false),
   codexWebSearchMode: optional('CODEX_WEB_SEARCH', 'disabled') as 'disabled' | 'cached' | 'live',
   codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '',
+  // Codex API proxy (OpenAI-compatible base URL)
+  codexBaseUrl: optional('CODEX_BASE_URL', ''),
+  codexApiKey: optional('CODEX_API_KEY', ''),
 } as const;

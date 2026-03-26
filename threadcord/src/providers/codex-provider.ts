@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { config } from '../config.ts';
 import type {
   Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
 } from './types.ts';
@@ -113,7 +114,10 @@ export class CodexProvider implements Provider {
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
 
-      const codex = new Codex();
+      const codexOpts: Record<string, any> = {};
+      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
+      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      const codex = new Codex(codexOpts);
 
       const threadOptions: Record<string, any> = {
         workingDirectory: options.directory,
@@ -158,7 +162,10 @@ export class CodexProvider implements Provider {
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
 
-      const codex = new Codex();
+      const codexOpts: Record<string, any> = {};
+      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
+      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      const codex = new Codex(codexOpts);
       const threadOptions: Record<string, any> = {
         workingDirectory: options.directory,
         skipGitRepoCheck: true,
