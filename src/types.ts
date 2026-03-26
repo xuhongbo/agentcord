@@ -194,6 +194,8 @@ export interface Config {
   guildId: string | null;
   allowedUsers: string[];
   allowAllUsers: boolean;
+  shellEnabled: boolean;
+  shellAllowedUsers: string[];
   messageRetentionDays: number | null;
   rateLimitMs: number;
   codexSandboxMode?: CodexSandboxMode;

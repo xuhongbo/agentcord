@@ -61,6 +61,8 @@ export const config: Config = {
   guildId: getConfigValue('DISCORD_GUILD_ID') ?? null,
   allowedUsers: getConfigValue('ALLOWED_USERS')?.split(',').map(id => id.trim()).filter(Boolean) ?? [],
   allowAllUsers: getConfigValue('ALLOW_ALL_USERS') === 'true',
+  shellEnabled: getConfigValue('SHELL_ENABLED') === 'true',
+  shellAllowedUsers: getConfigValue('SHELL_ALLOWED_USERS')?.split(',').map(id => id.trim()).filter(Boolean) ?? [],
   messageRetentionDays: getConfigValue('MESSAGE_RETENTION_DAYS')
     ? parseInt(getConfigValue('MESSAGE_RETENTION_DAYS')!, 10)
     : null,
@@ -83,6 +85,15 @@ if (config.allowedUsers.length > 0) {
 
 if (config.messageRetentionDays) {
   console.log(`Message retention: ${config.messageRetentionDays} day(s)`);
+}
+
+
+if (config.shellEnabled) {
+  if (config.shellAllowedUsers.length > 0) {
+    console.log(`Shell access: enabled for ${config.shellAllowedUsers.length} user(s)`);
+  } else {
+    console.warn('WARNING: SHELL_ENABLED=true but SHELL_ALLOWED_USERS is empty; falling back to normal user authorization rules.');
+  }
 }
 
 if (config.codexSandboxMode || config.codexApprovalPolicy || config.codexNetworkAccessEnabled !== undefined) {

@@ -880,8 +880,18 @@ async function handleSessionGoal(interaction: ChatInputCommandInteraction): Prom
 // /shell commands
 
 export async function handleShell(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers)) {
-    await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
+  if (!config.shellEnabled) {
+    await interaction.reply({
+      content: 'Shell execution is disabled. Enable it with `agentcord config set SHELL_ENABLED true` and set SHELL_ALLOWED_USERS.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const allowedByShellList = config.shellAllowedUsers.length === 0 || config.shellAllowedUsers.includes(interaction.user.id);
+  const allowedByGlobal = isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers);
+  if (!allowedByShellList || !allowedByGlobal) {
+    await interaction.reply({ content: 'You are not authorized for shell access.', ephemeral: true });
     return;
   }
 
@@ -898,6 +908,7 @@ export async function handleShell(interaction: ChatInputCommandInteraction): Pro
       const command = interaction.options.getString('command', true);
       await interaction.deferReply();
       await interaction.editReply(`Running: \`${truncate(command, 100)}\``);
+      log(`[shell] ${interaction.user.tag} in ${session.directory}: ${truncate(command, 200)}`);
       await executeShellCommand(command, session.directory, interaction.channel as TextChannel);
       break;
     }
@@ -916,6 +927,7 @@ export async function handleShell(interaction: ChatInputCommandInteraction): Pro
     case 'kill': {
       const pid = interaction.options.getInteger('pid', true);
       const killed = killProcess(pid);
+      if (killed) log(`[shell] ${interaction.user.tag} killed process ${pid}`);
       await interaction.reply({
         content: killed ? `Process ${pid} killed.` : `Process ${pid} not found.`,
         ephemeral: true,
