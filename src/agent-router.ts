@@ -1,7 +1,6 @@
 import type { Message, TextChannel, WebhookClient } from 'discord.js';
 import * as sessions from './session-manager.ts';
 import * as agentMgr from './agent-manager.ts';
-import { config } from './config.ts';
 import { splitMessage, isAbortError } from './utils.ts';
 import * as projectMgr from './project-manager.ts';
 import type { AgentData } from './types.ts';
@@ -135,10 +134,7 @@ function resolveChannelContext(channel: TextChannel): { directory: string; proje
       return { directory: project.directory, projectName: project.name };
     }
   }
-  return {
-    directory: config.defaultDirectory,
-    projectName: 'default',
-  };
+  throw new Error('Channel is not associated with any mounted project. Use `agentcord project init` to register a project.');
 }
 
 // ── Webhook streaming ──

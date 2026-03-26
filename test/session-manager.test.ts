@@ -12,6 +12,19 @@ type ProviderStub = {
 
 const ensureProviderMock = vi.fn();
 
+vi.mock('../src/global-config.ts', () => ({
+  getConfigValue: (key: string) => process.env[key],
+  setConfigValue: vi.fn(),
+  deleteConfigValue: vi.fn(),
+  getAllConfig: () => ({}),
+  getConfigPath: () => '/mock/config.json',
+  VALID_KEYS: new Set(['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_GUILD_ID', 'ALLOWED_USERS', 'ALLOW_ALL_USERS', 'CODEX_SANDBOX_MODE', 'CODEX_APPROVAL_POLICY', 'CODEX_NETWORK_ACCESS_ENABLED', 'MESSAGE_RETENTION_DAYS', 'RATE_LIMIT_MS']),
+  SENSITIVE_KEYS: new Set(['DISCORD_TOKEN']),
+  validateConfigValue: () => null,
+  maskSensitive: (_key: string, value: string) => value,
+  _setStoreForTest: vi.fn(),
+}));
+
 vi.mock('../src/providers/index.ts', () => ({
   ensureProvider: ensureProviderMock,
 }));
@@ -37,8 +50,6 @@ function setBaseEnv(): void {
   process.env.DISCORD_CLIENT_ID = '123456789012345678';
   process.env.ALLOW_ALL_USERS = 'true';
   process.env.ALLOWED_USERS = '';
-  process.env.DEFAULT_DIRECTORY = process.cwd();
-  process.env.ALLOWED_PATHS = '';
 }
 
 describe('session-manager', () => {

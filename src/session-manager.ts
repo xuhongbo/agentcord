@@ -4,7 +4,7 @@ import type { CodexApprovalPolicy, CodexSandboxMode } from './providers/types.ts
 import { Store } from './persistence.ts';
 import { getAgent } from './agents.ts';
 import { getPersonality } from './project-manager.ts';
-import { sanitizeSessionName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
+import { sanitizeSessionName, resolvePath, isAbortError } from './utils.ts';
 import type { Session, SessionPersistData, SessionMode, SessionWorkflowState } from './types.ts';
 import { config } from './config.ts';
 
@@ -168,9 +168,6 @@ export async function createSession(
       }
     : options;
 
-  if (!isPathAllowed(resolvedDir, config.allowedPaths)) {
-    throw new Error(`Directory not in allowed paths: ${resolvedDir}`);
-  }
   if (!existsSync(resolvedDir)) {
     throw new Error(`Directory does not exist: ${resolvedDir}`);
   }

@@ -7,7 +7,7 @@ vi.mock('configstore', () => {
     private data: Map<string, string> = new Map();
     path = '/mock/configstore/agentcord.json';
 
-    get store(): Record<string, string> {
+    get all(): Record<string, string> {
       return Object.fromEntries(this.data);
     }
 

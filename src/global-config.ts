@@ -95,7 +95,7 @@ export function deleteConfigValue(key: string): void {
 }
 
 export function getAllConfig(): Record<string, string> {
-  return (getStore().store ?? {}) as Record<string, string>;
+  return (getStore().all ?? {}) as Record<string, string>;
 }
 
 export function getConfigPath(): string {
