@@ -76,9 +76,11 @@ describe('session-manager', () => {
     const provider = makeProviderStub();
     ensureProviderMock.mockResolvedValue(provider);
     const sessions = await import('../src/session-manager.ts');
+    const { _setDataDirForTest } = await import('../src/persistence.ts');
+    _setDataDirForTest(tmpCwd);
 
     const session = await sessions.createSession('feature', tmpCwd, 'pending', 'project-x', 'codex');
-    const storePath = join(tmpCwd, '.discord-friends', 'sessions.json');
+    const storePath = join(tmpCwd, 'sessions.json');
 
     expect(existsSync(storePath)).toBe(false);
     expect(sessions.getSessionByChannel('pending')).toBeUndefined();
@@ -95,7 +97,7 @@ describe('session-manager', () => {
     const provider = makeProviderStub();
     ensureProviderMock.mockResolvedValue(provider);
 
-    const storeDir = join(tmpCwd, '.discord-friends');
+    const storeDir = tmpCwd;
     const storePath = join(storeDir, 'sessions.json');
     mkdirSync(storeDir, { recursive: true });
 
@@ -137,6 +139,8 @@ describe('session-manager', () => {
     ], null, 2), 'utf-8');
 
     const sessions = await import('../src/session-manager.ts');
+    const { _setDataDirForTest } = await import('../src/persistence.ts');
+    _setDataDirForTest(tmpCwd);
     await sessions.loadSessions();
 
     const all = sessions.getAllSessions();
@@ -245,13 +249,15 @@ describe('session-manager', () => {
     const provider = makeProviderStub();
     ensureProviderMock.mockResolvedValue(provider);
     const sessions = await import('../src/session-manager.ts');
+    const { _setDataDirForTest } = await import('../src/persistence.ts');
+    _setDataDirForTest(tmpCwd);
 
     const session = await sessions.createSession('monitor-goal', tmpCwd, 'pending', 'project-x', 'codex');
     sessions.setMode(session.id, 'monitor');
     sessions.setMonitorGoal(session.id, 'Build a hard memory benchmark.');
     await sessions.linkChannel(session.id, 'chan-monitor');
 
-    const storePath = join(tmpCwd, '.discord-friends', 'sessions.json');
+    const storePath = join(tmpCwd, 'sessions.json');
     const persisted = JSON.parse(readFileSync(storePath, 'utf-8'));
     expect(persisted[0]).toMatchObject({
       channelId: 'chan-monitor',
@@ -284,6 +290,8 @@ describe('session-manager', () => {
     const provider = makeProviderStub();
     ensureProviderMock.mockResolvedValue(provider);
     const sessions = await import('../src/session-manager.ts');
+    const { _setDataDirForTest } = await import('../src/persistence.ts');
+    _setDataDirForTest(tmpCwd);
 
     const session = await sessions.createSession('workflow-state', tmpCwd, 'pending', 'project-x', 'codex');
     sessions.updateWorkflowState(session.id, {
@@ -341,7 +349,7 @@ describe('session-manager', () => {
       },
     });
 
-    const storePath = join(tmpCwd, '.discord-friends', 'sessions.json');
+    const storePath = join(tmpCwd, 'sessions.json');
     const persisted = JSON.parse(readFileSync(storePath, 'utf-8'));
     expect(persisted[0].workflowState).toMatchObject({
       status: 'monitor_review',
