@@ -33,7 +33,7 @@ export class ClaudeProvider implements Provider {
 
   supports(feature: string): boolean {
     return [
-      'tmux', 'resume_from_terminal', 'plugins',
+      'resume_from_terminal', 'plugins',
       'ask_user_question', 'mode_switching', 'continue',
     ].includes(feature);
   }

@@ -35,7 +35,6 @@ export interface Session {
   directory: string;
   projectName: string;
   provider: ProviderName;
-  tmuxName: string;
   providerSessionId?: string;
   model?: string;
   sandboxMode?: CodexSandboxMode;
@@ -60,7 +59,6 @@ export interface SessionPersistData {
   directory: string;
   projectName: string;
   provider?: ProviderName;
-  tmuxName: string;
   providerSessionId?: string;
   model?: string;
   sandboxMode?: CodexSandboxMode;

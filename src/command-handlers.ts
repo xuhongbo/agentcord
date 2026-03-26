@@ -256,8 +256,8 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
       { name: 'Directory', value: session.directory, inline: true },
       { name: 'Project', value: projectName, inline: true },
     ];
-    if (session.tmuxName) {
-      fields.push({ name: 'Terminal', value: `\`tmux attach -t ${session.tmuxName}\``, inline: false });
+    if (session.providerSessionId) {
+      fields.push({ name: 'Session ID', value: `\`${session.providerSessionId}\``, inline: false });
     }
     addCodexPolicyFields(fields, codexOptions);
 
@@ -278,8 +278,8 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
       { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     ];
-    if (session.tmuxName) {
-      welcomeFields.push({ name: 'Terminal Access', value: `\`tmux attach -t ${session.tmuxName}\``, inline: false });
+    if (session.providerSessionId) {
+      welcomeFields.push({ name: 'Session ID', value: `\`${session.providerSessionId}\``, inline: false });
     }
     addCodexPolicyFields(welcomeFields, codexOptions);
     welcomeEmbed.addFields(welcomeFields);
@@ -497,9 +497,6 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
       { name: 'Project', value: projectName, inline: true },
       { name: 'Provider Session', value: `\`${providerSessionId}\``, inline: false },
     ];
-    if (session.tmuxName) {
-      fields.push({ name: 'Terminal', value: `\`tmux attach -t ${session.tmuxName}\``, inline: false });
-    }
     addCodexPolicyFields(fields, codexOptions);
 
     const embed = new EmbedBuilder()
@@ -515,9 +512,6 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
       { name: 'Provider Session', value: `\`${providerSessionId}\``, inline: false },
     ];
-    if (session.tmuxName) {
-      welcomeFields.push({ name: 'Terminal Access', value: `\`tmux attach -t ${session.tmuxName}\``, inline: false });
-    }
     addCodexPolicyFields(welcomeFields, codexOptions);
 
     await channel.send({
@@ -667,9 +661,9 @@ async function handleSessionAttach(interaction: ChatInputCommandInteraction): Pr
   }
 
   const info = sessions.getAttachInfo(session.id);
-  if (!info) {
+  if (!info || !info.sessionId) {
     await interaction.reply({
-      content: `Terminal attach is not available for ${PROVIDER_LABELS[session.provider]} sessions.`,
+      content: `No provider session ID available yet. Send a message first to initialize the session.`,
       ephemeral: true,
     });
     return;
@@ -678,16 +672,10 @@ async function handleSessionAttach(interaction: ChatInputCommandInteraction): Pr
   const embed = new EmbedBuilder()
     .setColor(0x9b59b6)
     .setTitle('Terminal Access')
-    .addFields(
-      { name: 'Attach to tmux', value: `\`\`\`\n${info.command}\n\`\`\`` },
-    );
-
-  if (info.sessionId) {
-    embed.addFields({
-      name: 'Resume Claude in terminal',
-      value: `\`\`\`\ncd ${session.directory} && claude --resume ${info.sessionId}\n\`\`\``,
+    .addFields({
+      name: 'Resume in terminal',
+      value: `\`\`\`\ncd ${session.directory}\n${session.provider === 'claude' ? 'claude' : 'codex'} --resume ${info.sessionId}\n\`\`\``,
     });
-  }
 
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
@@ -696,16 +684,12 @@ async function handleSessionSync(interaction: ChatInputCommandInteraction): Prom
   await interaction.deferReply();
 
   const guild = interaction.guild!;
-  const tmuxSessions = await sessions.listTmuxSessions();
   const currentSessions = sessions.getAllSessions();
-  const currentIds = new Set(currentSessions.map(s => s.id));
   const currentChannelIds = new Set(currentSessions.map(s => s.channelId));
 
-  let syncedTmux = 0;
   let syncedChannels = 0;
 
-  // First, recover provider channels that already exist in Discord but are not mapped in memory.
-  // This is the main recovery path for Codex sessions (no tmux transport).
+  // Recover provider channels that already exist in Discord but are not mapped in memory
   for (const ch of guild.channels.cache.values()) {
     if (ch.type !== ChannelType.GuildText) continue;
     if (currentChannelIds.has(ch.id)) continue;
@@ -734,49 +718,15 @@ async function handleSessionSync(interaction: ChatInputCommandInteraction): Prom
         { recoverExisting: true },
       );
       syncedChannels++;
-      currentIds.add(recovered.id);
       currentChannelIds.add(ch.id);
     } catch {
       // best effort
     }
   }
 
-  // Then, recover orphan tmux sessions that don't have a Discord channel yet.
-  for (const tmuxSession of tmuxSessions) {
-    if (currentIds.has(tmuxSession.id)) continue;
-
-    const projectName = projectNameFromDir(tmuxSession.directory);
-    const { category } = await ensureProjectCategory(guild, projectName, tmuxSession.directory);
-
-    const channel = await guild.channels.create({
-      name: `claude-${tmuxSession.id}`,
-      type: ChannelType.GuildText,
-      parent: category.id,
-      topic: `Claude Code session (synced) | Dir: ${tmuxSession.directory}`,
-    });
-
-    const recovered = await sessions.createSession(
-      tmuxSession.id,
-      tmuxSession.directory,
-      channel.id,
-      projectName,
-      'claude',
-      undefined,
-      { recoverExisting: true },
-    );
-    syncedTmux++;
-    currentIds.add(recovered.id);
-    currentChannelIds.add(channel.id);
-  }
-
-  const synced = syncedChannels + syncedTmux;
-  const detail = [];
-  if (syncedChannels > 0) detail.push(`${syncedChannels} channel`);
-  if (syncedTmux > 0) detail.push(`${syncedTmux} tmux`);
-
   await interaction.editReply(
-    synced > 0
-      ? `Synced ${synced} orphaned session(s) (${detail.join(', ')}).`
+    syncedChannels > 0
+      ? `Synced ${syncedChannels} orphaned session(s).`
       : 'No orphaned sessions found.',
   );
 }

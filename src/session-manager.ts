@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { ensureProvider, type ProviderEvent, type ProviderName, type ContentBlock } from './providers/index.ts';
 import type { CodexApprovalPolicy, CodexSandboxMode } from './providers/types.ts';
@@ -8,8 +7,6 @@ import { getPersonality } from './project-manager.ts';
 import { sanitizeSessionName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
 import type { Session, SessionPersistData, SessionMode, SessionWorkflowState } from './types.ts';
 import { config } from './config.ts';
-
-const SESSION_PREFIX = 'agentcord-';
 
 const MODE_PROMPTS: Record<SessionMode, string> = {
   auto: '',
@@ -52,24 +49,6 @@ function createDefaultWorkflowState(): SessionWorkflowState {
   };
 }
 
-// Async tmux helper — never blocks the event loop
-function tmux(...args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('tmux', args, { encoding: 'utf-8' }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
-
-async function tmuxSessionExists(tmuxName: string): Promise<boolean> {
-  try {
-    await tmux('has-session', '-t', tmuxName);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function isPlaceholderChannelId(channelId: string | undefined): boolean {
   return !channelId || channelId === 'pending';
@@ -97,18 +76,6 @@ export async function loadSessions(): Promise<void> {
     // Migration: handle old claudeSessionId field and missing provider
     const provider: ProviderName = s.provider ?? 'claude';
     const providerSessionId = s.providerSessionId ?? (s as any).claudeSessionId;
-
-    // Only manage tmux for providers that use it
-    if (provider === 'claude') {
-      const exists = await tmuxSessionExists(s.tmuxName);
-      if (!exists) {
-        try {
-          await tmux('new-session', '-d', '-s', s.tmuxName, '-c', s.directory);
-        } catch {
-          console.warn(`Could not recreate tmux session ${s.tmuxName}`);
-        }
-      }
-    }
 
     sessions.set(s.id, {
       ...s,
@@ -141,7 +108,6 @@ async function persistSessionsNow(): Promise<void> {
       directory: s.directory,
       projectName: s.projectName,
       provider: s.provider,
-      tmuxName: s.tmuxName,
       providerSessionId: s.providerSessionId,
       model: s.model,
       sandboxMode: s.sandboxMode,
@@ -210,33 +176,19 @@ export async function createSession(
   }
 
   // Validate the provider is available
-  const providerInstance = await ensureProvider(provider);
-  const usesTmux = providerInstance.supports('tmux');
+  await ensureProvider(provider);
 
   // Auto-deduplicate: append -2, -3, etc. if name is taken
   let id = sanitizeSessionName(name);
-  let tmuxName = usesTmux ? `${SESSION_PREFIX}${id}` : '';
   if (options.recoverExisting) {
     if (sessions.has(id)) {
       throw new Error(`Session "${id}" already exists`);
     }
   } else {
     let suffix = 1;
-    while (sessions.has(id) || (usesTmux && await tmuxSessionExists(tmuxName))) {
+    while (sessions.has(id)) {
       suffix++;
       id = sanitizeSessionName(`${name}-${suffix}`);
-      if (usesTmux) tmuxName = `${SESSION_PREFIX}${id}`;
-    }
-  }
-
-  if (usesTmux) {
-    if (options.recoverExisting) {
-      const existing = await tmuxSessionExists(tmuxName);
-      if (!existing) {
-        await tmux('new-session', '-d', '-s', tmuxName, '-c', resolvedDir);
-      }
-    } else {
-      await tmux('new-session', '-d', '-s', tmuxName, '-c', resolvedDir);
     }
   }
 
@@ -246,7 +198,6 @@ export async function createSession(
     directory: resolvedDir,
     projectName,
     provider,
-    tmuxName,
     providerSessionId,
     sandboxMode: effectiveOptions.sandboxMode,
     approvalPolicy: effectiveOptions.approvalPolicy,
@@ -292,15 +243,6 @@ export async function endSession(id: string): Promise<void> {
   // Abort if generating
   if (session.isGenerating && (session as any)._controller) {
     (session as any)._controller.abort();
-  }
-
-  // Kill tmux only if it was created
-  if (session.tmuxName) {
-    try {
-      await tmux('kill-session', '-t', session.tmuxName);
-    } catch {
-      // Already dead
-    }
   }
 
   if (!isPlaceholderChannelId(session.channelId)) {
@@ -637,37 +579,12 @@ export function consumeAbortReason(sessionId: string): 'user' | 'watchdog' | und
   return reason;
 }
 
-// Tmux info for /session attach
+// Session info for /session attach
 
-export function getAttachInfo(sessionId: string): { command: string; sessionId?: string } | null {
+export function getAttachInfo(sessionId: string): { sessionId?: string } | null {
   const session = sessions.get(sessionId);
-  if (!session || !session.tmuxName) return null;
+  if (!session) return null;
   return {
-    command: `tmux attach -t ${session.tmuxName}`,
     sessionId: session.providerSessionId,
   };
-}
-
-// List tmux sessions for sync
-
-export async function listTmuxSessions(): Promise<Array<{ id: string; tmuxName: string; directory: string }>> {
-  try {
-    const output = await tmux(
-      'list-sessions', '-F', '#{session_name}|#{pane_current_path}',
-    );
-    return output
-      .trim()
-      .split('\n')
-      .filter(line => line.startsWith(SESSION_PREFIX))
-      .map(line => {
-        const [name, path] = line.split('|');
-        return {
-          id: name.replace(SESSION_PREFIX, ''),
-          tmuxName: name,
-          directory: path || 'unknown',
-        };
-      });
-  } catch {
-    return [];
-  }
 }
