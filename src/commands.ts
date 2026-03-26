@@ -47,7 +47,7 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
               { name: 'Monitor — keep steering until complete', value: 'monitor' },
             ))
         .addStringOption(opt =>
-          opt.setName('directory').setDescription('Working directory (default: configured default)')))
+          opt.setName('project').setDescription('Mounted project name').setRequired(true).setAutocomplete(true)))
     .addSubcommand(sub =>
       sub.setName('resume')
         .setDescription('Resume an existing session from terminal')
@@ -87,7 +87,7 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
               { name: 'Monitor — keep steering until complete', value: 'monitor' },
             ))
         .addStringOption(opt =>
-          opt.setName('directory').setDescription('Working directory (default: configured default)')))
+          opt.setName('project').setDescription('Mounted project name').setRequired(true).setAutocomplete(true)))
     .addSubcommand(sub =>
       sub.setName('list').setDescription('List active sessions'))
     .addSubcommand(sub =>
@@ -223,7 +223,9 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
     .addSubcommand(sub =>
       sub.setName('mcp-list').setDescription('List configured MCP servers'))
     .addSubcommand(sub =>
-      sub.setName('info').setDescription('Show project configuration'));
+      sub.setName('info').setDescription('Show project configuration'))
+    .addSubcommand(sub =>
+      sub.setName('list').setDescription('List mounted projects and Discord category status'));
 
   const plugin = new SlashCommandBuilder()
     .setName('plugin')

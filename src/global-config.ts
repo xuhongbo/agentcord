@@ -13,6 +13,8 @@ export const VALID_KEYS = new Set([
   'CODEX_NETWORK_ACCESS_ENABLED',
   'MESSAGE_RETENTION_DAYS',
   'RATE_LIMIT_MS',
+  'SHELL_ENABLED',
+  'SHELL_ALLOWED_USERS',
 ]);
 
 const CODEX_SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
@@ -53,6 +55,12 @@ export function validateConfigValue(key: string, value: string): string | null {
     case 'ALLOW_ALL_USERS':
       if (value !== 'true' && value !== 'false') {
         return `Invalid value for ALLOW_ALL_USERS. Expected "true" or "false"`;
+      }
+      break;
+
+    case 'SHELL_ENABLED':
+      if (value !== 'true' && value !== 'false') {
+        return `Invalid value for SHELL_ENABLED. Expected "true" or "false"`;
       }
       break;
     case 'RATE_LIMIT_MS': {

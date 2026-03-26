@@ -10,11 +10,12 @@ import {
 } from 'discord.js';
 import { config } from './config.ts';
 import { registerCommands } from './commands.ts';
-import { handleSession, handleSessionAutocomplete, handleShell, handleAgent, handleProject, handlePlugin, handlePluginAutocomplete, setLogger } from './command-handlers.ts';
+import { handleSession, handleSessionAutocomplete, handleProjectAutocomplete, handleShell, handleAgent, handleProject, handlePlugin, handlePluginAutocomplete, setLogger } from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
 import { handleButton, handleSelectMenu } from './button-handler.ts';
 import { loadSessions, getAllSessions, unlinkChannel } from './session-manager.ts';
-import { loadProjects } from './project-manager.ts';
+import { loadRegistry, getAllRegisteredProjects, updateProjectDiscord } from './project-registry.ts';
+import { startSync, stopSync } from './session-sync.ts';
 
 let client: Client;
 let logChannel: TextChannel | null = null;
@@ -110,6 +111,9 @@ export async function startBot(): Promise<void> {
 
       if (interaction.isAutocomplete()) {
         if (interaction.commandName === 'session') {
+          if (interaction.options.getFocused(true).name === 'project') {
+            return await handleProjectAutocomplete(interaction);
+          }
           return await handleSessionAutocomplete(interaction);
         }
         if (interaction.commandName === 'plugin') {
@@ -152,7 +156,7 @@ export async function startBot(): Promise<void> {
     await registerCommands();
 
     // Load persisted state
-    await loadProjects();
+    await loadRegistry();
     await loadSessions();
 
     // Set up log channel in the first guild
@@ -173,10 +177,33 @@ export async function startBot(): Promise<void> {
           console.warn('Could not create #bot-logs channel');
         }
       }
+
+      for (const project of getAllRegisteredProjects()) {
+        try {
+          let category = project.discordCategoryId
+            ? guild.channels.cache.get(project.discordCategoryId)
+            : undefined;
+          if (!category) {
+            category = guild.channels.cache.find(
+              ch => ch.type === ChannelType.GuildCategory && ch.name === project.name,
+            );
+          }
+          if (!category || category.type !== ChannelType.GuildCategory) {
+            const created = await guild.channels.create({
+              name: project.name,
+              type: ChannelType.GuildCategory,
+            });
+            await updateProjectDiscord(project.name, created.id, project.discordLogChannelId);
+          }
+        } catch {
+          // best effort
+        }
+      }
     }
 
     botLog(`Bot online. ${getAllSessions().length} session(s) restored.`);
     updatePresence();
+    startSync(client);
 
     // Presence update interval
     setInterval(updatePresence, 30_000);
@@ -192,6 +219,7 @@ export async function startBot(): Promise<void> {
   const shutdown = () => {
     botLog('Shutting down...');
     flushLogs();
+    stopSync();
     client.destroy();
     process.exit(0);
   };

@@ -74,13 +74,6 @@ export function isUserAllowed(userId: string, allowedUsers: string[], allowAll: 
   if (allowAll) return true;
   return allowedUsers.includes(userId);
 }
-
-export function projectNameFromDir(directory: string): string {
-  const resolved = resolvePath(directory);
-  const basename = resolved.split('/').pop() || 'unknown';
-  return sanitizeSessionName(basename);
-}
-
 export function detectNumberedOptions(text: string): string[] | null {
   const lines = text.trim().split('\n');
   const options: string[] = [];

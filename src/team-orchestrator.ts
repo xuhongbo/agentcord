@@ -9,6 +9,7 @@ import * as sessions from './session-manager.ts';
 import * as agentMgr from './agent-manager.ts';
 import { streamAgentResponse } from './agent-router.ts';
 import { ensureProjectCategory } from './command-handlers.ts';
+import { getProjectByName } from './project-registry.ts';
 import { sanitizeSessionName } from './utils.ts';
 import type { AgentData } from './types.ts';
 import type {
@@ -147,7 +148,9 @@ export async function startTeamTask(
   const taskId = `team-${slugifyTask(description)}-${Date.now().toString(36)}`;
 
   // [1] Create channel under project category
-  const { category } = await ensureProjectCategory(guild, projectName, directory);
+  const project = getProjectByName(projectName);
+  if (!project) throw new Error(`Project not found: ${projectName}`);
+  const { category } = await ensureProjectCategory(guild, project);
   const channel = await guild.channels.create({
     name: `team-${slugifyTask(description)}`.slice(0, 100),
     type: ChannelType.GuildText,

@@ -1,5 +1,26 @@
 import type { ProviderName, CodexSandboxMode, CodexApprovalPolicy } from './providers/types.ts';
 
+
+export interface AgentWebhookRef {
+  id: string;
+  token: string;
+}
+
+export interface AgentData {
+  id: string;
+  name: string;
+  role: string;
+  systemPrompt: string;
+  provider: ProviderName;
+  model?: string;
+  emoji?: string;
+  avatarUrl?: string;
+  createdAt: number;
+  createdBy: string;
+  channelSessions: Record<string, string>;
+  webhooks: Record<string, AgentWebhookRef>;
+}
+
 // Re-export content block types from providers (used by message-handler, etc.)
 export type {
   ContentBlock,
@@ -51,6 +72,7 @@ export interface Session {
   lastActivity: number;
   messageCount: number;
   totalCost: number;
+  source?: 'remote' | 'local-sync';
 }
 
 export interface SessionPersistData {
@@ -74,6 +96,7 @@ export interface SessionPersistData {
   lastActivity: number;
   messageCount: number;
   totalCost: number;
+  source?: 'remote' | 'local-sync';
 }
 
 export type SessionMode = 'auto' | 'plan' | 'normal' | 'monitor';
@@ -171,6 +194,8 @@ export interface Config {
   guildId: string | null;
   allowedUsers: string[];
   allowAllUsers: boolean;
+  shellEnabled: boolean;
+  shellAllowedUsers: string[];
   messageRetentionDays: number | null;
   rateLimitMs: number;
   codexSandboxMode?: CodexSandboxMode;
