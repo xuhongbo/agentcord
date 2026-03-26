@@ -18,9 +18,15 @@ import {
 } from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
 import { handleButton, handleSelectMenu } from './button-handler.ts';
-import { loadSessions, getAllSessions, endSession, getSessionByThread } from './thread-manager.ts';
+import {
+  loadSessions,
+  getAllSessions,
+  endSession,
+  getSessionByChannel,
+} from './thread-manager.ts';
 import { loadProjects } from './project-manager.ts';
 import { runSubagentWatchdog } from './subagent-manager.ts';
+import { loadArchived, checkAutoArchive } from './archive-manager.ts';
 
 let client: Client;
 let logChannel: TextChannel | null = null;
@@ -72,16 +78,17 @@ async function cleanupOldMessages(): Promise<void> {
   const cutoff = Date.now() - config.messageRetentionDays * 24 * 60 * 60 * 1000;
 
   for (const session of getAllSessions()) {
+    if (session.type !== 'persistent') continue;
     try {
-      const thread = client.channels.cache.get(session.threadId);
-      if (!thread?.isThread()) continue;
+      const channel = client.channels.cache.get(session.channelId) as TextChannel | undefined;
+      if (!channel) continue;
 
-      const messages = await thread.messages.fetch({ limit: 100 });
+      const messages = await channel.messages.fetch({ limit: 100 });
       const old = messages.filter(m => m.createdTimestamp < cutoff);
       if (old.size > 0) {
-        await thread.bulkDelete(old, true);
+        await channel.bulkDelete(old, true);
       }
-    } catch { /* thread may not exist */ }
+    } catch { /* channel may not exist */ }
   }
 }
 
@@ -126,26 +133,26 @@ export async function startBot(): Promise<void> {
     }
   });
 
-  // Thread messages → route to agent sessions
+  // Messages in session channels (TextChannel) and subagent threads
   client.on('messageCreate', handleMessage);
 
-  // Thread deleted → end the session
-  client.on('threadDelete', thread => {
-    const session = getSessionByThread(thread.id);
-    if (session) {
+  // Session channel deleted → end the persistent session
+  client.on('channelDelete', channel => {
+    const session = getSessionByChannel(channel.id);
+    if (session && session.type === 'persistent') {
       endSession(session.id).catch(err =>
-        console.error(`Failed to end session on thread delete: ${err.message}`),
+        console.error(`Failed to end session on channel delete: ${err.message}`),
       );
     }
   });
 
-  // Thread unarchived → session reactivation handled naturally (message arrives → session found)
-  client.on('threadUpdate', (oldThread, newThread) => {
-    if (oldThread.archived && !newThread.archived) {
-      const session = getSessionByThread(newThread.id);
-      if (session) {
-        botLog(`Thread unarchived: <#${newThread.id}> (session ${session.id})`);
-      }
+  // Subagent thread deleted → end the subagent session
+  client.on('threadDelete', thread => {
+    const session = getSessionByChannel(thread.id);
+    if (session && session.type === 'subagent') {
+      endSession(session.id).catch(err =>
+        console.error(`Failed to end subagent session on thread delete: ${err.message}`),
+      );
     }
   });
 
@@ -156,12 +163,13 @@ export async function startBot(): Promise<void> {
     await registerCommands();
     await loadProjects();
     await loadSessions();
+    loadArchived();
 
-    // Find or create #bot-logs channel
+    // Find or create #bot-logs channel at the server root (no category)
     const guild = client.guilds.cache.first();
     if (guild) {
       logChannel = guild.channels.cache.find(
-        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText,
+        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
       ) as TextChannel | undefined ?? null;
 
       if (!logChannel) {
@@ -169,6 +177,7 @@ export async function startBot(): Promise<void> {
           logChannel = await guild.channels.create({
             name: 'bot-logs',
             type: ChannelType.GuildText,
+            reason: 'Auto-created by threadcord for bot logs',
           });
         } catch {
           console.warn('Could not create #bot-logs channel');
@@ -189,6 +198,18 @@ export async function startBot(): Promise<void> {
         return ch?.isThread() ? ch : undefined;
       }).catch(err => console.error(`Subagent watchdog error: ${err.message}`));
     }, 5 * 60 * 1000);
+
+    // Auto-archive check every hour
+    if (config.autoArchiveDays || config.maxActiveSessionsPerProject) {
+      const guild = client.guilds.cache.first();
+      if (guild) {
+        setInterval(() => {
+          checkAutoArchive(guild).catch(err =>
+            console.error(`Auto-archive check error: ${err.message}`),
+          );
+        }, 60 * 60 * 1000);
+      }
+    }
 
     // Message cleanup
     if (config.messageRetentionDays) {

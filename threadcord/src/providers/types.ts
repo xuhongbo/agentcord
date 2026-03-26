@@ -1,4 +1,4 @@
-export type ProviderName = 'claude' | 'codex';
+export type ProviderName = 'claude' | 'codex' | 'gemini';
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 

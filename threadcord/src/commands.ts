@@ -5,10 +5,10 @@ const commands = [
   // ── /project ──────────────────────────────────────────────────────
   new SlashCommandBuilder()
     .setName('project')
-    .setDescription('Manage project channel configuration')
+    .setDescription('Manage project (Category) configuration')
     .addSubcommand(sub => sub
       .setName('setup')
-      .setDescription('Register this channel as a project')
+      .setDescription('Register this channel\'s Category as a project (creates #history forum)')
       .addStringOption(opt => opt
         .setName('directory')
         .setDescription('Working directory on host (default: DEFAULT_DIRECTORY)')
@@ -52,10 +52,10 @@ const commands = [
   // ── /agent ────────────────────────────────────────────────────────
   new SlashCommandBuilder()
     .setName('agent')
-    .setDescription('Manage AI agent threads')
+    .setDescription('Manage AI agent sessions (one channel per agent)')
     .addSubcommand(sub => sub
       .setName('spawn')
-      .setDescription('Create a new agent thread in this project channel')
+      .setDescription('Create a new agent session channel under this project category')
       .addStringOption(opt => opt.setName('label').setDescription('Thread label (e.g. fix-login-bug)').setRequired(true))
       .addStringOption(opt => opt
         .setName('provider')
@@ -78,13 +78,16 @@ const commands = [
       .addStringOption(opt => opt.setName('directory').setDescription('Override working directory').setRequired(false)))
     .addSubcommand(sub => sub
       .setName('list')
-      .setDescription('List all agent threads in this project channel'))
+      .setDescription('List all active agent sessions in this project'))
+    .addSubcommand(sub => sub
+      .setName('archive')
+      .setDescription('Archive this session to #history and delete the channel'))
     .addSubcommand(sub => sub
       .setName('stop')
-      .setDescription('Stop generation in the current thread'))
+      .setDescription('Stop generation in the current session'))
     .addSubcommand(sub => sub
       .setName('end')
-      .setDescription('End and archive the current agent thread'))
+      .setDescription('End this session (deletes channel or archives thread)'))
     .addSubcommand(sub => sub
       .setName('mode')
       .setDescription('Switch execution mode for the current thread')
@@ -132,10 +135,10 @@ const commands = [
   // ── /subagent ─────────────────────────────────────────────────────
   new SlashCommandBuilder()
     .setName('subagent')
-    .setDescription('Manage ephemeral subagent threads')
+    .setDescription('Manage ephemeral subagent threads (spawned under a session channel)')
     .addSubcommand(sub => sub
       .setName('run')
-      .setDescription('Spawn an ephemeral subagent thread')
+      .setDescription('Spawn an ephemeral subagent thread under this session channel')
       .addStringOption(opt => opt.setName('label').setDescription('Subagent label').setRequired(true))
       .addStringOption(opt => opt
         .setName('provider')

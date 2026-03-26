@@ -45,13 +45,13 @@ Rules:
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
-const threadStore = new Store<SessionPersistData[]>('threads.json');
+const sessionStore = new Store<SessionPersistData[]>('sessions.json');
 
-// threadId (Discord Thread ID) → ThreadSession
+// channelId (the session's own Discord channel or thread ID) → ThreadSession
 const sessions = new Map<string, ThreadSession>();
 
-// internal session id → threadId  (for getSession by internal id)
-const idToThreadId = new Map<string, string>();
+// internal session id → channelId
+const idToChannelId = new Map<string, string>();
 
 let saveQueue: Promise<void> = Promise.resolve();
 
@@ -68,26 +68,32 @@ function createDefaultWorkflowState(): SessionWorkflowState {
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
 export async function loadSessions(): Promise<void> {
-  const data = threadStore.read();
+  const data = sessionStore.read();
   if (!data) return;
 
   let cleaned = false;
 
   for (const s of data) {
-    if (!s.threadId) {
+    // Skip sessions from old architecture (no categoryId) — incompatible format
+    if (!s.categoryId) {
       cleaned = true;
-      console.warn(`Skipping invalid persisted session "${s.id}" (missing threadId).`);
+      console.warn(`Skipping legacy session "${s.id}" (no categoryId — old architecture).`);
       continue;
     }
-    if (sessions.has(s.threadId)) {
+    if (!s.channelId) {
       cleaned = true;
-      console.warn(`Skipping duplicate persisted session "${s.id}" (threadId ${s.threadId} already loaded).`);
+      console.warn(`Skipping invalid persisted session "${s.id}" (missing channelId).`);
+      continue;
+    }
+    if (sessions.has(s.channelId)) {
+      cleaned = true;
+      console.warn(`Skipping duplicate persisted session "${s.id}" (channelId ${s.channelId} already loaded).`);
       continue;
     }
 
     const provider: ProviderName = s.provider ?? 'claude';
 
-    sessions.set(s.threadId, {
+    sessions.set(s.channelId, {
       ...s,
       provider,
       verbose: s.verbose ?? false,
@@ -97,14 +103,14 @@ export async function loadSessions(): Promise<void> {
       workflowState: s.workflowState ?? createDefaultWorkflowState(),
       isGenerating: false,
     });
-    idToThreadId.set(s.id, s.threadId);
+    idToChannelId.set(s.id, s.channelId);
   }
 
   if (cleaned) {
     await saveSessions();
   }
 
-  console.log(`[thread-manager] Restored ${sessions.size} session(s)`);
+  console.log(`[session-manager] Restored ${sessions.size} session(s)`);
 }
 
 async function persistSessionsNow(): Promise<void> {
@@ -112,19 +118,19 @@ async function persistSessionsNow(): Promise<void> {
   for (const [, s] of sessions) {
     data.push({
       id: s.id,
-      threadId: s.threadId,
       channelId: s.channelId,
+      categoryId: s.categoryId,
       projectName: s.projectName,
       agentLabel: s.agentLabel,
       provider: s.provider,
       providerSessionId: s.providerSessionId,
       type: s.type,
-      parentThreadId: s.parentThreadId,
+      parentChannelId: s.parentChannelId,
       subagentDepth: s.subagentDepth,
       directory: s.directory,
       mode: s.mode !== 'auto' ? s.mode : undefined as unknown as SessionMode,
       agentPersona: s.agentPersona,
-      verbose: s.verbose || undefined,
+      verbose: s.verbose || false,
       monitorGoal: s.monitorGoal,
       monitorProviderSessionId: s.monitorProviderSessionId,
       workflowState: s.workflowState,
@@ -134,7 +140,7 @@ async function persistSessionsNow(): Promise<void> {
       totalCost: s.totalCost,
     });
   }
-  threadStore.write(data);
+  sessionStore.write(data);
 }
 
 function saveSessions(): Promise<void> {
@@ -144,7 +150,7 @@ function saveSessions(): Promise<void> {
       try {
         await persistSessionsNow();
       } catch (err: unknown) {
-        console.error(`[thread-manager] Failed to persist sessions: ${(err as Error).message}`);
+        console.error(`[session-manager] Failed to persist sessions: ${(err as Error).message}`);
       }
     });
   return saveQueue;
@@ -153,27 +159,27 @@ function saveSessions(): Promise<void> {
 // ─── Create / CRUD ────────────────────────────────────────────────────────────
 
 export interface CreateSessionParams {
-  threadId: string;
-  channelId: string;
+  channelId: string;             // Session's own Discord channel (TextChannel) or thread ID
+  categoryId: string;            // Parent project category ID
   projectName: string;
   agentLabel: string;
   provider: ProviderName;
   directory: string;
   type: 'persistent' | 'subagent';
-  parentThreadId?: string;
+  parentChannelId?: string;      // For subagents: parent session's TextChannel ID
   subagentDepth?: number;
   mode?: SessionMode;
 }
 
 export async function createSession(params: CreateSessionParams): Promise<ThreadSession> {
   const {
-    threadId,
     channelId,
+    categoryId,
     projectName,
     agentLabel,
     provider,
     type,
-    parentThreadId,
+    parentChannelId,
     subagentDepth = 0,
     mode = config.defaultMode,
   } = params;
@@ -187,31 +193,30 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     throw new Error(`Directory does not exist: ${resolvedDir}`);
   }
 
-  // Validate provider is available
   await ensureProvider(provider);
 
-  if (sessions.has(threadId)) {
-    throw new Error(`Session for threadId "${threadId}" already exists`);
+  if (sessions.has(channelId)) {
+    throw new Error(`Session for channelId "${channelId}" already exists`);
   }
 
   // Derive a unique internal ID from the agentLabel (auto-deduplicate)
   let id = sanitizeName(agentLabel);
   let suffix = 1;
-  while (idToThreadId.has(id)) {
+  while (idToChannelId.has(id)) {
     suffix++;
     id = sanitizeName(`${agentLabel}-${suffix}`);
   }
 
   const session: ThreadSession = {
     id,
-    threadId,
     channelId,
+    categoryId,
     projectName,
     agentLabel,
     provider,
     providerSessionId: undefined,
     type,
-    parentThreadId,
+    parentChannelId,
     subagentDepth,
     directory: resolvedDir,
     mode,
@@ -227,27 +232,31 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     totalCost: 0,
   };
 
-  sessions.set(threadId, session);
-  idToThreadId.set(id, threadId);
+  sessions.set(channelId, session);
+  idToChannelId.set(id, channelId);
   await saveSessions();
 
   return session;
 }
 
 export function getSession(id: string): ThreadSession | undefined {
-  // Lookup by internal session id
-  const threadId = idToThreadId.get(id);
-  return threadId ? sessions.get(threadId) : undefined;
+  const channelId = idToChannelId.get(id);
+  return channelId ? sessions.get(channelId) : undefined;
 }
 
-export function getSessionByThread(threadId: string): ThreadSession | undefined {
-  return sessions.get(threadId);
+/** Look up a session by its Discord channel or thread ID. */
+export function getSessionByChannel(channelId: string): ThreadSession | undefined {
+  return sessions.get(channelId);
 }
 
-export function getSessionsByChannel(channelId: string): ThreadSession[] {
+/** Backward-compat alias (subagent sessions are still threads). */
+export const getSessionByThread = getSessionByChannel;
+
+/** List all sessions under a project category. */
+export function getSessionsByCategory(categoryId: string): ThreadSession[] {
   const result: ThreadSession[] = [];
   for (const [, session] of sessions) {
-    if (session.channelId === channelId) {
+    if (session.categoryId === categoryId) {
       result.push(session);
     }
   }
@@ -262,13 +271,12 @@ export async function endSession(id: string): Promise<void> {
   const session = getSession(id);
   if (!session) throw new Error(`Session "${id}" not found`);
 
-  // Abort if currently generating
   if (session.isGenerating && (session as any)._controller) {
     (session as any)._controller.abort();
   }
 
-  idToThreadId.delete(session.id);
-  sessions.delete(session.threadId);
+  idToChannelId.delete(session.id);
+  sessions.delete(session.channelId);
   await saveSessions();
 }
 
@@ -352,8 +360,7 @@ export function resetWorkflowState(sessionId: string): void {
 function buildSystemPromptParts(session: ThreadSession): string[] {
   const parts: string[] = [];
 
-  // Look up personality by channelId (project channel)
-  const personality = getPersonality(session.channelId);
+  const personality = getPersonality(session.categoryId);
   if (personality) parts.push(personality);
 
   if (session.agentPersona) {
@@ -370,7 +377,7 @@ function buildSystemPromptParts(session: ThreadSession): string[] {
 function buildMonitorSystemPromptParts(session: ThreadSession): string[] {
   const parts: string[] = [];
 
-  const personality = getPersonality(session.channelId);
+  const personality = getPersonality(session.categoryId);
   if (personality) parts.push(personality);
 
   parts.push(MONITOR_SYSTEM_PROMPT);
@@ -531,7 +538,6 @@ export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watc
     controller.abort();
   }
 
-  // Force-clear generating state — the SDK may not throw AbortError reliably
   if (session.isGenerating) {
     session.isGenerating = false;
     delete (session as any)._controller;

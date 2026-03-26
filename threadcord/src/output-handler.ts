@@ -5,9 +5,12 @@ import {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  type TextChannel,
   type AnyThreadChannel,
   type Message,
 } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import { existsSync } from 'node:fs';
 import type { ProviderEvent, ProviderName } from './providers/types.ts';
 import { splitMessage, truncate, detectNumberedOptions, detectYesNoPrompt, isAbortError } from './utils.ts';
@@ -267,7 +270,7 @@ function renderAskUserQuestion(
  * at a time, preventing duplicate messages from race conditions.
  */
 class MessageStreamer {
-  private channel: AnyThreadChannel;
+  private channel: SessionChannel;
   private sessionId: string;
   private currentMessage: Message | null = null;
   private currentText = '';
@@ -276,7 +279,7 @@ class MessageStreamer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly INTERVAL = 400;
 
-  constructor(channel: AnyThreadChannel, sessionId: string) {
+  constructor(channel: SessionChannel, sessionId: string) {
     this.channel = channel;
     this.sessionId = sessionId;
   }
@@ -385,7 +388,7 @@ class MessageStreamer {
 
 export async function handleOutputStream(
   stream: AsyncGenerator<ProviderEvent>,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
   sessionId: string,
   verbose = false,
   mode = 'auto',

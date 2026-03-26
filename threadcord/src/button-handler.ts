@@ -5,8 +5,11 @@ import {
   StringSelectMenuBuilder,
   type ButtonInteraction,
   type StringSelectMenuInteraction,
+  type TextChannel,
   type AnyThreadChannel,
 } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import { config } from './config.ts';
 import * as sessions from './thread-manager.ts';
 import {
@@ -53,7 +56,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     }
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply('Continuing...');
       await executeSessionContinue(session, channel);
     } catch (err: unknown) {
@@ -88,7 +91,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const optionText = `${optionIndex + 1}`;
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Selected option ${optionIndex + 1}`);
       await executeSessionPrompt(session, channel, optionText);
     } catch (err: unknown) {
@@ -165,7 +168,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     clearPendingAnswers(sessionId);
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Submitted answers:\n${combined}`);
       await executeSessionPrompt(session, channel, combined);
     } catch (err: unknown) {
@@ -187,7 +190,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     }
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: **${truncate(answer, 100)}**`);
       await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
@@ -208,7 +211,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     }
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: ${answer}`);
       await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
@@ -317,7 +320,7 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     }
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: **${truncate(selected, 100)}**`);
       await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {
@@ -336,7 +339,7 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     }
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as AnyThreadChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Selected: ${truncate(selected, 100)}`);
       await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {

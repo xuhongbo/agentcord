@@ -1,18 +1,19 @@
 import {
+  ChannelType,
   type Message,
+  type TextChannel,
   type AnyThreadChannel,
-  AttachmentBuilder,
 } from 'discord.js';
-import { readFileSync } from 'node:fs';
 import sharp from 'sharp';
 import { config } from './config.ts';
-import { getSessionByThread } from './thread-manager.ts';
+import { getSessionByChannel } from './thread-manager.ts';
 import { executeSessionPrompt } from './session-executor.ts';
-import { handleOutputStream } from './output-handler.ts';
 import { isUserAllowed, isAbortError } from './utils.ts';
 import type { ContentBlock, ImageBlock, ImageMediaType } from './providers/types.ts';
 
-// Per-user rate limiting (threadId-scoped): userId:threadId → timestamp
+type SessionChannel = TextChannel | AnyThreadChannel;
+
+// Per-user rate limiting: userId:channelId → timestamp
 const lastMessageTime = new Map<string, number>();
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
@@ -42,14 +43,13 @@ function mimeToMediaType(ext: string): ImageMediaType {
 async function buildImageBlock(data: Buffer, ext: string): Promise<ImageBlock> {
   let processed = data;
 
-  // Resize if too large
   if (data.length > MAX_IMAGE_BASE64_BYTES) {
     try {
       processed = await sharp(data)
         .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
         .toBuffer();
     } catch {
-      processed = data; // fallback to original
+      processed = data;
     }
   }
 
@@ -67,33 +67,38 @@ export async function handleMessage(message: Message): Promise<void> {
   // Ignore bots
   if (message.author.bot) return;
 
-  // Only handle messages in threads
-  if (!message.channel.isThread()) return;
+  const channel = message.channel;
 
-  const thread = message.channel as AnyThreadChannel;
+  // Only handle messages in:
+  //   - GuildText channels (persistent sessions — Category > Channel > messages)
+  //   - Threads (subagent sessions — Category > Channel > Thread > messages)
+  const isSessionChannel = channel.type === ChannelType.GuildText;
+  const isSubagentThread = channel.isThread();
 
-  // Only handle sessions we're managing
-  const session = getSessionByThread(thread.id);
+  if (!isSessionChannel && !isSubagentThread) return;
+
+  // Look up session by the channel/thread ID (both persistent and subagent sessions use this key)
+  const session = getSessionByChannel(channel.id);
   if (!session) return;
 
   // Authorization
   if (!isUserAllowed(message.author.id, config.allowedUsers, config.allowAllUsers)) {
-    await thread.send('You are not authorized to use this bot.').catch(() => {});
+    await (channel as SessionChannel).send('You are not authorized to use this bot.').catch(() => {});
     return;
   }
 
-  // Per-user+thread rate limiting
-  const rateKey = `${message.author.id}:${thread.id}`;
+  // Per-user+channel rate limiting
+  const rateKey = `${message.author.id}:${channel.id}`;
   const now = Date.now();
   const last = lastMessageTime.get(rateKey) || 0;
   if (now - last < config.rateLimitMs) {
-    return; // silently drop (don't spam with rate-limit messages)
+    return; // silently drop
   }
   lastMessageTime.set(rateKey, now);
 
   // Guard: already generating
   if (session.isGenerating) {
-    await thread.send('*Agent is already generating. Stop it first with `/agent stop`.*').catch(() => {});
+    await (channel as SessionChannel).send('*Agent is already generating. Stop it first with `/agent stop`.*').catch(() => {});
     return;
   }
 
@@ -127,8 +132,7 @@ export async function handleMessage(message: Message): Promise<void> {
 
   if (blocks.length === 0) return;
 
-  // Execute the prompt via session executor
-  await executeSessionPrompt(session, thread, blocks.length === 1 && blocks[0].type === 'text'
+  await executeSessionPrompt(session, channel as SessionChannel, blocks.length === 1 && blocks[0].type === 'text'
     ? (blocks[0] as { type: 'text'; text: string }).text
     : blocks);
 }

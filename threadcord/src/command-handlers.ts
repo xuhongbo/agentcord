@@ -4,17 +4,22 @@ import {
   ThreadAutoArchiveDuration,
   type ChatInputCommandInteraction,
   type TextChannel,
+  type CategoryChannel,
   type AnyThreadChannel,
+  type Guild,
 } from 'discord.js';
 import { config } from './config.ts';
-import * as threadMgr from './thread-manager.ts';
+import * as sessionMgr from './thread-manager.ts';
 import * as projectMgr from './project-manager.ts';
 import { spawnSubagent, getSubagents } from './subagent-manager.ts';
+import { archiveSession } from './archive-manager.ts';
 import { executeSessionPrompt, executeSessionContinue } from './session-executor.ts';
 import { makeModeButtons } from './output-handler.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import { isUserAllowed, resolvePath, formatUptime, formatRelative } from './utils.ts';
 import type { ProviderName, SessionMode } from './types.ts';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 
 let logFn: (msg: string) => void = console.log;
 export function setLogger(fn: (msg: string) => void): void { logFn = fn; }
@@ -23,11 +28,13 @@ function log(msg: string): void { logFn(msg); }
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   claude: 'Claude Code',
   codex: 'OpenAI Codex',
+  gemini: 'Gemini',
 };
 
 const PROVIDER_COLORS: Record<ProviderName, number> = {
   claude: 0x3498db,
   codex: 0x10a37f,
+  gemini: 0x4285f4,
 };
 
 const MODE_LABELS: Record<SessionMode, string> = {
@@ -45,11 +52,22 @@ function assertUserAllowed(interaction: ChatInputCommandInteraction): boolean {
   return true;
 }
 
-function resolveProjectChannelId(interaction: ChatInputCommandInteraction): string {
-  if (interaction.channel?.isThread()) {
-    return (interaction.channel as AnyThreadChannel).parentId ?? interaction.channelId;
+/**
+ * Resolve the project's Category ID from the current interaction channel.
+ * Works from: a session TextChannel, a subagent Thread, or a plain Category channel.
+ */
+function resolveProjectCategoryId(interaction: ChatInputCommandInteraction): string | null {
+  const channel = interaction.channel;
+  if (!channel) return null;
+
+  if (channel.isThread()) {
+    // Subagent thread → parent is a TextChannel → grandparent is the category
+    const parent = (channel as AnyThreadChannel).parent as TextChannel | null;
+    return parent?.parentId ?? null;
   }
-  return interaction.channelId;
+
+  // TextChannel → parentId is the category
+  return (channel as TextChannel).parentId ?? null;
 }
 
 // ── /project ──────────────────────────────────────────────────────────────────
@@ -74,52 +92,91 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
 }
 
 async function handleProjectSetup(interaction: ChatInputCommandInteraction): Promise<void> {
-  // Must be in a plain text channel, not a thread
+  // Must be in a TextChannel (not a thread)
   if (interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/project setup` in a project channel, not inside a thread.', ephemeral: true });
+    await interaction.reply({ content: 'Run `/project setup` in a regular channel, not inside a thread.', ephemeral: true });
+    return;
+  }
+
+  const categoryId = (interaction.channel as TextChannel)?.parentId;
+  if (!categoryId) {
+    await interaction.reply({ content: 'This channel is not under a Category. Please run this command in a channel that belongs to a Category (which represents your project).', ephemeral: true });
     return;
   }
 
   const directory = interaction.options.getString('directory') || config.defaultDirectory;
   const resolvedDir = resolvePath(directory);
-  const channelId = interaction.channelId;
-  const channelName = (interaction.channel as TextChannel)?.name || 'unknown';
 
   await interaction.deferReply();
 
-  const project = projectMgr.getOrCreateProject(channelId, channelName, resolvedDir);
+  const guild = interaction.guild!;
+  const category = guild.channels.cache.get(categoryId) as CategoryChannel | undefined;
+  const categoryName = category?.name || 'unknown';
+
+  const project = projectMgr.getOrCreateProject(categoryId, categoryName, resolvedDir);
+
+  // Ensure #history Forum channel exists
+  let historyInfo = '';
+  if (!project.historyChannelId) {
+    try {
+      const historyForum = await guild.channels.create({
+        name: 'history',
+        type: ChannelType.GuildForum,
+        parent: categoryId,
+        topic: 'Archived agent sessions for this project',
+        reason: 'Created by threadcord for session archiving',
+      });
+      projectMgr.setHistoryChannelId(categoryId, historyForum.id);
+      historyInfo = `\n• History forum: <#${historyForum.id}>`;
+    } catch {
+      historyInfo = '\n• (Could not create #history forum — create it manually if needed)';
+    }
+  } else {
+    historyInfo = `\n• History forum: <#${project.historyChannelId}>`;
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
     .setTitle(`✅ Project Ready: ${project.name}`)
     .addFields(
-      { name: 'Channel', value: `<#${channelId}>`, inline: true },
+      { name: 'Category', value: `**${categoryName}**`, inline: true },
       { name: 'Directory', value: `\`${resolvedDir}\``, inline: true },
     )
-    .setDescription('Use `/agent spawn` to create an agent thread in this channel.');
+    .setDescription(`Use \`/agent spawn\` in any channel under **${categoryName}** to create an agent session.${historyInfo}`);
 
   await interaction.editReply({ embeds: [embed] });
   log(`Project "${project.name}" set up by ${interaction.user.tag}`);
 }
 
 async function handleProjectInfo(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const project = projectMgr.getProject(channelId);
-  if (!project) {
-    await interaction.reply({ content: 'This channel is not set up as a project. Run `/project setup` first.', ephemeral: true });
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category from this channel.', ephemeral: true });
     return;
   }
 
-  const sessions = threadMgr.getSessionsByChannel(channelId);
+  const project = projectMgr.getProject(categoryId);
+  if (!project) {
+    await interaction.reply({ content: 'No project set up for this category. Run `/project setup` first.', ephemeral: true });
+    return;
+  }
+
+  const sessions = sessionMgr.getSessionsByCategory(categoryId);
+  const activeSessions = sessions.filter(s => s.type === 'persistent');
+
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
     .setTitle(`📁 Project: ${project.name}`)
     .addFields(
       { name: 'Directory', value: `\`${project.directory}\``, inline: false },
-      { name: 'Active Threads', value: `${sessions.length}`, inline: true },
+      { name: 'Active Sessions', value: `${activeSessions.length}`, inline: true },
       { name: 'Skills', value: `${project.skills.length}`, inline: true },
       { name: 'MCP Servers', value: `${project.mcpServers.length}`, inline: true },
     );
+
+  if (project.historyChannelId) {
+    embed.addFields({ name: 'History', value: `<#${project.historyChannelId}>`, inline: true });
+  }
 
   if (project.personality) {
     embed.addFields({ name: 'Personality', value: `\`\`\`\n${project.personality.slice(0, 500)}\n\`\`\`` });
@@ -129,46 +186,66 @@ async function handleProjectInfo(interaction: ChatInputCommandInteraction): Prom
 }
 
 async function handleProjectPersonality(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const project = projectMgr.getProject(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+  const project = projectMgr.getProject(categoryId);
   if (!project) {
     await interaction.reply({ content: 'Run `/project setup` first.', ephemeral: true });
     return;
   }
   const prompt = interaction.options.getString('prompt', true);
-  projectMgr.setPersonality(channelId, prompt);
+  projectMgr.setPersonality(categoryId, prompt);
   await interaction.reply({ content: `Personality set for project **${project.name}**.`, ephemeral: true });
 }
 
 async function handleProjectPersonalityClear(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  projectMgr.clearPersonality(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+  projectMgr.clearPersonality(categoryId);
   await interaction.reply({ content: 'Personality cleared.', ephemeral: true });
 }
 
 async function handleProjectSkillAdd(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const project = projectMgr.getProject(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+  const project = projectMgr.getProject(categoryId);
   if (!project) {
     await interaction.reply({ content: 'Run `/project setup` first.', ephemeral: true });
     return;
   }
   const name = interaction.options.getString('name', true);
   const prompt = interaction.options.getString('prompt', true);
-  projectMgr.addSkill(channelId, name, prompt);
+  projectMgr.addSkill(categoryId, name, prompt);
   await interaction.reply({ content: `Skill **${name}** added.`, ephemeral: true });
 }
 
 async function handleProjectSkillRemove(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
   const name = interaction.options.getString('name', true);
-  const removed = projectMgr.removeSkill(channelId, name);
+  const removed = projectMgr.removeSkill(categoryId, name);
   await interaction.reply({ content: removed ? `Skill **${name}** removed.` : `Skill **${name}** not found.`, ephemeral: true });
 }
 
 async function handleProjectSkillList(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const skills = projectMgr.getSkills(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+  const skills = projectMgr.getSkills(categoryId);
   if (skills.length === 0) {
     await interaction.reply({ content: 'No skills defined. Use `/project skill-add`.', ephemeral: true });
     return;
@@ -178,42 +255,51 @@ async function handleProjectSkillList(interaction: ChatInputCommandInteraction):
 }
 
 async function handleProjectSkillRun(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
   const name = interaction.options.getString('name', true);
   const input = interaction.options.getString('input') || undefined;
-  const prompt = projectMgr.executeSkill(channelId, name, input);
+  const prompt = projectMgr.executeSkill(categoryId, name, input);
   if (!prompt) {
     await interaction.reply({ content: `Skill **${name}** not found.`, ephemeral: true });
     return;
   }
 
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this command inside an agent thread.', ephemeral: true });
+  // Must be run from a session channel (or subagent thread)
+  const channel = interaction.channel;
+  if (!channel) {
+    await interaction.reply({ content: 'No channel context.', ephemeral: true });
     return;
   }
 
-  const thread = interaction.channel as AnyThreadChannel;
-  const session = threadMgr.getSessionByThread(thread.id);
+  const session = sessionMgr.getSessionByChannel(channel.id);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'Run this command inside an active agent session channel.', ephemeral: true });
     return;
   }
 
   await interaction.deferReply();
   await interaction.editReply(`Running skill **${name}**...`);
-  await executeSessionPrompt(session, thread, prompt);
+  await executeSessionPrompt(session, channel as SessionChannel, prompt);
 }
 
 async function handleProjectMcpAdd(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const project = projectMgr.getProject(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+  const project = projectMgr.getProject(categoryId);
   if (!project) {
     await interaction.reply({ content: 'Run `/project setup` first.', ephemeral: true });
     return;
   }
   const name = interaction.options.getString('name', true);
   const command = interaction.options.getString('command', true);
-  projectMgr.addMcpServer(channelId, name, command);
+  projectMgr.addMcpServer(categoryId, name, command);
   await interaction.reply({ content: `MCP server **${name}** added.`, ephemeral: true });
 }
 
@@ -228,6 +314,7 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
     case 'list': return handleAgentList(interaction);
     case 'stop': return handleAgentStop(interaction);
     case 'end': return handleAgentEnd(interaction);
+    case 'archive': return handleAgentArchive(interaction);
     case 'mode': return handleAgentMode(interaction);
     case 'goal': return handleAgentGoal(interaction);
     case 'persona': return handleAgentPersona(interaction);
@@ -240,16 +327,21 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
 }
 
 async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promise<void> {
-  // Must be in a project channel (not inside a thread)
+  // Must be in a TextChannel (not inside a thread)
   if (interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/agent spawn` in the project channel, not inside a thread.', ephemeral: true });
+    await interaction.reply({ content: 'Run `/agent spawn` in a project channel, not inside a thread.', ephemeral: true });
     return;
   }
 
-  const channelId = interaction.channelId;
-  const project = projectMgr.getProject(channelId);
+  const categoryId = (interaction.channel as TextChannel)?.parentId;
+  if (!categoryId) {
+    await interaction.reply({ content: 'This channel is not under a Category. Run `/project setup` first.', ephemeral: true });
+    return;
+  }
+
+  const project = projectMgr.getProject(categoryId);
   if (!project) {
-    await interaction.reply({ content: 'This channel is not set up as a project. Run `/project setup` first.', ephemeral: true });
+    await interaction.reply({ content: 'No project set up for this category. Run `/project setup` first.', ephemeral: true });
     return;
   }
 
@@ -261,45 +353,58 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
   await interaction.deferReply();
 
   const guild = interaction.guild!;
-  const projectChannel = guild.channels.cache.get(channelId) as TextChannel;
 
-  // Create Discord thread
-  const threadName = `[${PROVIDER_LABELS[provider]}] ${label}`.slice(0, 100);
-  const thread = await projectChannel.threads.create({
-    name: threadName,
-    type: ChannelType.PublicThread,
-    autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-    reason: `Agent session spawned by ${interaction.user.tag}`,
-  });
-
-  // Create session
-  const session = await threadMgr.createSession({
-    threadId: thread.id,
-    channelId,
-    projectName: project.name,
-    agentLabel: label,
-    provider,
-    directory,
-    type: 'persistent',
-    mode,
-  });
-
-  if (mode !== 'auto') {
-    threadMgr.setMode(session.id, mode);
+  // Create a new TextChannel under the same category
+  const channelName = `${provider}-${label}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 100);
+  let sessionChannel: TextChannel;
+  try {
+    sessionChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: categoryId,
+      topic: `[${PROVIDER_LABELS[provider]}] ${label}`,
+      reason: `Agent session spawned by ${interaction.user.tag}`,
+    });
+  } catch (err: unknown) {
+    await interaction.editReply(`Failed to create session channel: ${(err as Error).message}`);
+    return;
   }
 
-  // Send welcome embed into the thread
+  // Create session record
+  let session;
+  try {
+    session = await sessionMgr.createSession({
+      channelId: sessionChannel.id,
+      categoryId,
+      projectName: project.name,
+      agentLabel: label,
+      provider,
+      directory,
+      type: 'persistent',
+      mode,
+    });
+  } catch (err: unknown) {
+    // Clean up channel if session creation fails
+    await sessionChannel.delete('Session creation failed').catch(() => {});
+    await interaction.editReply(`Failed to create session: ${(err as Error).message}`);
+    return;
+  }
+
+  if (mode !== 'auto') {
+    sessionMgr.setMode(session.id, mode);
+  }
+
+  // Send welcome embed into the session channel
   const welcomeEmbed = new EmbedBuilder()
     .setColor(PROVIDER_COLORS[provider])
-    .setTitle(`${PROVIDER_LABELS[provider]} Agent`)
+    .setTitle(`${PROVIDER_LABELS[provider]} Agent — ${label}`)
     .setDescription('Type a message to start the agent. Use `/agent stop` to cancel generation.')
     .addFields(
-      { name: 'Label', value: label, inline: true },
       { name: 'Mode', value: MODE_LABELS[mode], inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     );
 
-  await thread.send({
+  await sessionChannel.send({
     embeds: [welcomeEmbed],
     components: [makeModeButtons(session.id, mode)],
   });
@@ -309,160 +414,168 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     .setColor(0x2ecc71)
     .setTitle(`✅ Agent Created: ${label}`)
     .addFields(
-      { name: 'Thread', value: `<#${thread.id}>`, inline: true },
+      { name: 'Channel', value: `<#${sessionChannel.id}>`, inline: true },
       { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
       { name: 'Mode', value: MODE_LABELS[mode], inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     );
 
   await interaction.editReply({ embeds: [embed] });
-  log(`Agent "${label}" (${provider}) spawned by ${interaction.user.tag} in channel ${channelId}`);
+  log(`Agent "${label}" (${provider}) spawned by ${interaction.user.tag} in category ${categoryId}`);
 }
 
 async function handleAgentList(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const sessions = threadMgr.getSessionsByChannel(channelId);
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+
+  const sessions = sessionMgr.getSessionsByCategory(categoryId).filter(s => s.type === 'persistent');
 
   if (sessions.length === 0) {
-    await interaction.reply({ content: 'No active agent threads in this project.', ephemeral: true });
+    await interaction.reply({ content: 'No active agent sessions in this project.', ephemeral: true });
     return;
   }
 
   const lines = sessions.map(s => {
     const status = s.isGenerating ? '🔄 Generating' : '💤 Idle';
-    const typeLabel = s.type === 'subagent' ? '[sub] ' : '';
-    return `${status} | \`${typeLabel}${s.agentLabel}\` | ${s.provider} | <#${s.threadId}> | ${formatRelative(s.lastActivity)}`;
+    return `${status} | \`${s.agentLabel}\` | ${s.provider} | <#${s.channelId}> | ${formatRelative(s.lastActivity)}`;
   });
 
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
-    .setTitle(`Agent Threads (${sessions.length})`)
+    .setTitle(`Agent Sessions (${sessions.length})`)
     .setDescription(lines.join('\n'));
 
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 async function handleAgentStop(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel. Run this inside an agent session channel.', ephemeral: true });
     return;
   }
-  const stopped = threadMgr.abortSession(session.id);
+  const stopped = sessionMgr.abortSession(session.id);
   await interaction.reply({ content: stopped ? 'Generation stopped.' : 'Agent was not generating.', ephemeral: true });
 }
 
 async function handleAgentEnd(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const thread = interaction.channel as AnyThreadChannel;
-  const session = threadMgr.getSessionByThread(thread.id);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
 
   await interaction.deferReply();
-  await threadMgr.endSession(session.id);
+  await sessionMgr.endSession(session.id);
 
-  try {
-    await thread.setArchived(true, `Ended by ${interaction.user.tag}`);
-  } catch { /* best effort */ }
+  // For persistent sessions, delete the channel; for subagents, archive the thread
+  if (session.type === 'persistent' && interaction.guild) {
+    try {
+      const ch = interaction.guild.channels.cache.get(session.channelId) as TextChannel | undefined;
+      if (ch) await ch.delete(`Ended by ${interaction.user.tag}`);
+    } catch { /* best effort */ }
+  } else if (session.type === 'subagent' && interaction.channel?.isThread()) {
+    try {
+      await (interaction.channel as AnyThreadChannel).setArchived(true, `Ended by ${interaction.user.tag}`);
+    } catch { /* best effort */ }
+  }
 
-  await interaction.editReply('Agent session ended and thread archived.');
+  await interaction.editReply('Agent session ended.').catch(() => {});
   log(`Session "${session.id}" ended by ${interaction.user.tag}`);
 }
 
-async function handleAgentMode(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
+async function handleAgentArchive(interaction: ChatInputCommandInteraction): Promise<void> {
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
+  if (!session) {
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  if (session.type !== 'persistent') {
+    await interaction.reply({ content: 'Only persistent sessions can be archived. Use `/agent end` for subagents.', ephemeral: true });
+    return;
+  }
+  if (!interaction.guild) {
+    await interaction.reply({ content: 'Guild context required.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+  try {
+    await archiveSession(session, interaction.guild);
+    await interaction.editReply('Session archived to #history. Channel deleted.').catch(() => {});
+    log(`Session "${session.id}" archived by ${interaction.user.tag}`);
+  } catch (err: unknown) {
+    await interaction.editReply(`Archive failed: ${(err as Error).message}`);
+  }
+}
+
+async function handleAgentMode(interaction: ChatInputCommandInteraction): Promise<void> {
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   const mode = interaction.options.getString('mode', true) as SessionMode;
-  threadMgr.setMode(session.id, mode);
+  sessionMgr.setMode(session.id, mode);
   await interaction.reply({ content: `Mode set to **${MODE_LABELS[mode]}**.`, ephemeral: true });
 }
 
 async function handleAgentGoal(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   const goal = interaction.options.getString('goal', true);
-  threadMgr.setMonitorGoal(session.id, goal);
+  sessionMgr.setMonitorGoal(session.id, goal);
   await interaction.reply({ content: `Monitor goal set: *${goal}*`, ephemeral: true });
 }
 
 async function handleAgentPersona(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   const persona = interaction.options.getString('name') || undefined;
-  threadMgr.setAgentPersona(session.id, persona === 'general' ? undefined : persona);
+  sessionMgr.setAgentPersona(session.id, persona === 'general' ? undefined : persona);
   await interaction.reply({ content: `Persona set to **${persona || 'general'}**.`, ephemeral: true });
 }
 
 async function handleAgentVerbose(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   const newVerbose = !session.verbose;
-  threadMgr.setVerbose(session.id, newVerbose);
+  sessionMgr.setVerbose(session.id, newVerbose);
   await interaction.reply({ content: `Verbose mode ${newVerbose ? 'enabled' : 'disabled'}.`, ephemeral: true });
 }
 
 async function handleAgentModel(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
-    return;
-  }
-  const session = threadMgr.getSessionByThread(interaction.channelId);
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   const model = interaction.options.getString('model', true);
-  threadMgr.setModel(session.id, model);
+  sessionMgr.setModel(session.id, model);
   await interaction.reply({ content: `Model set to \`${model}\`.`, ephemeral: true });
 }
 
 async function handleAgentContinue(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run this inside an agent thread.', ephemeral: true });
+  const channel = interaction.channel;
+  if (!channel) {
+    await interaction.reply({ content: 'No channel context.', ephemeral: true });
     return;
   }
-  const thread = interaction.channel as AnyThreadChannel;
-  const session = threadMgr.getSessionByThread(thread.id);
+  const session = sessionMgr.getSessionByChannel(channel.id);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
     return;
   }
   if (session.isGenerating) {
@@ -471,7 +584,7 @@ async function handleAgentContinue(interaction: ChatInputCommandInteraction): Pr
   }
   await interaction.deferReply();
   await interaction.editReply('Continuing...');
-  await executeSessionContinue(session, thread);
+  await executeSessionContinue(session, channel as SessionChannel);
 }
 
 // ── /subagent ─────────────────────────────────────────────────────────────────
@@ -489,37 +602,37 @@ export async function handleSubagent(interaction: ChatInputCommandInteraction): 
 }
 
 async function handleSubagentRun(interaction: ChatInputCommandInteraction): Promise<void> {
-  // Must be inside an agent thread
-  if (!interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/subagent run` inside an agent thread.', ephemeral: true });
+  // Must be in a session TextChannel (not already a thread)
+  if (interaction.channel?.isThread()) {
+    await interaction.reply({ content: 'Run `/subagent run` in an agent session channel, not inside a thread.', ephemeral: true });
     return;
   }
-  const thread = interaction.channel as AnyThreadChannel;
-  const parentSession = threadMgr.getSessionByThread(thread.id);
-  if (!parentSession) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
+  if (!session) {
+    await interaction.reply({ content: 'No active session in this channel. You must be in an agent session channel.', ephemeral: true });
     return;
   }
 
   const label = interaction.options.getString('label', true);
-  const provider = (interaction.options.getString('provider') || parentSession.provider) as ProviderName;
+  const provider = (interaction.options.getString('provider') || session.provider) as ProviderName;
 
   await interaction.deferReply();
 
   const guild = interaction.guild!;
-  const projectChannel = guild.channels.cache.get(parentSession.channelId) as TextChannel;
-  if (!projectChannel) {
-    await interaction.editReply('Could not find project channel.');
+  const sessionChannel = guild.channels.cache.get(session.channelId) as TextChannel | undefined;
+  if (!sessionChannel) {
+    await interaction.editReply('Could not find session channel.');
     return;
   }
 
   try {
-    const subSession = await spawnSubagent(parentSession, label, provider, projectChannel);
+    const subSession = await spawnSubagent(session, label, provider, sessionChannel);
     const embed = new EmbedBuilder()
       .setColor(0xf39c12)
       .setTitle(`🤖 Subagent Spawned: ${label}`)
       .addFields(
-        { name: 'Thread', value: `<#${subSession.threadId}>`, inline: true },
+        { name: 'Thread', value: `<#${subSession.channelId}>`, inline: true },
         { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
         { name: 'Depth', value: `${subSession.subagentDepth}`, inline: true },
       );
@@ -531,18 +644,21 @@ async function handleSubagentRun(interaction: ChatInputCommandInteraction): Prom
 }
 
 async function handleSubagentList(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = resolveProjectChannelId(interaction);
-  const allSessions = threadMgr.getSessionsByChannel(channelId);
-  const subagents = allSessions.filter(s => s.type === 'subagent');
+  const session = sessionMgr.getSessionByChannel(interaction.channelId);
+  if (!session) {
+    await interaction.reply({ content: 'No active session in this channel.', ephemeral: true });
+    return;
+  }
 
+  const subagents = getSubagents(session);
   if (subagents.length === 0) {
-    await interaction.reply({ content: 'No active subagents in this channel.', ephemeral: true });
+    await interaction.reply({ content: 'No active subagents for this session.', ephemeral: true });
     return;
   }
 
   const lines = subagents.map(s => {
     const status = s.isGenerating ? '🔄' : '💤';
-    return `${status} \`${s.agentLabel}\` | <#${s.threadId}> | depth: ${s.subagentDepth}`;
+    return `${status} \`${s.agentLabel}\` | <#${s.channelId}> | depth: ${s.subagentDepth}`;
   });
 
   await interaction.reply({ content: `Active subagents:\n${lines.join('\n')}`, ephemeral: true });
@@ -565,24 +681,29 @@ export async function handleShell(interaction: ChatInputCommandInteraction): Pro
 
 async function handleShellRun(interaction: ChatInputCommandInteraction): Promise<void> {
   const command = interaction.options.getString('command', true);
+  const channel = interaction.channel;
+  if (!channel) {
+    await interaction.reply({ content: 'No channel context.', ephemeral: true });
+    return;
+  }
 
-  // Resolve the working directory from thread session or project
-  const channelId = resolveProjectChannelId(interaction);
+  // Resolve working directory from session or project
   let cwd = config.defaultDirectory;
-
-  if (interaction.channel?.isThread()) {
-    const session = threadMgr.getSessionByThread(interaction.channelId);
-    if (session) cwd = session.directory;
+  const session = sessionMgr.getSessionByChannel(channel.id);
+  if (session) {
+    cwd = session.directory;
   } else {
-    const project = projectMgr.getProject(channelId);
-    if (project) cwd = project.directory;
+    const categoryId = resolveProjectCategoryId(interaction);
+    if (categoryId) {
+      const project = projectMgr.getProject(categoryId);
+      if (project) cwd = project.directory;
+    }
   }
 
   await interaction.deferReply();
   await interaction.editReply(`Running: \`${command}\``);
 
-  const thread = interaction.channel as AnyThreadChannel;
-  await executeShellCommand(command, cwd, thread);
+  await executeShellCommand(command, cwd, channel as SessionChannel);
 }
 
 async function handleShellProcesses(interaction: ChatInputCommandInteraction): Promise<void> {

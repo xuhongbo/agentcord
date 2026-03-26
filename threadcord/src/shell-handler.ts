@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import type { AnyThreadChannel } from 'discord.js';
+import type { TextChannel, AnyThreadChannel } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import type { ShellProcess } from './types.ts';
 import { truncate } from './utils.ts';
 
@@ -12,7 +14,7 @@ const EDIT_DEBOUNCE = 500;
 export async function executeShellCommand(
   command: string,
   cwd: string,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
 ): Promise<void> {
   const pid = ++pidCounter;
   const child = spawn('bash', ['-c', command], {

@@ -1,15 +1,16 @@
-import type { AnyThreadChannel } from 'discord.js';
+import type { TextChannel, AnyThreadChannel } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import * as sessions from './thread-manager.ts';
 import { handleOutputStream } from './output-handler.ts';
 import { isAbortError, truncate } from './utils.ts';
 import type {
-  ContentBlock,
   ThreadSession as Session,
   SessionMonitorFeedbackReport,
   SessionNextProofContract,
   SessionWorkerProgressReport,
 } from './types.ts';
-import type { ProviderEvent } from './providers/types.ts';
+import type { ProviderEvent, ContentBlock } from './providers/types.ts';
 
 const MAX_MONITOR_ITERATIONS = 6;
 const WORKER_IDLE_TIMEOUT_MS = 45_000;
@@ -475,7 +476,7 @@ function parseAskUserDecision(text: string): AskUserDecision | null {
 
 async function runWorkerPass(
   session: Session,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
   prompt: string | ContentBlock[] | null,
   iteration: number,
   mode: 'prompt' | 'continue' = 'prompt',
@@ -612,7 +613,7 @@ async function runAskUserDecision(
 
 async function resolveAskUserIfPossible(
   session: Session,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
   goal: string,
   workerResult: WorkerPassResult,
   iteration: number,
@@ -670,7 +671,7 @@ async function resolveAskUserIfPossible(
 
 async function runMonitorLoop(
   session: Session,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
   goal: string,
   initialResult: WorkerPassResult,
 ): Promise<void> {
@@ -783,7 +784,7 @@ async function runMonitorLoop(
 
 export async function executeSessionPrompt(
   session: Session,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
   prompt: string | ContentBlock[],
   options: { updateMonitorGoal?: boolean } = {},
 ): Promise<void> {
@@ -814,7 +815,7 @@ export async function executeSessionPrompt(
 
 export async function executeSessionContinue(
   session: Session,
-  channel: AnyThreadChannel,
+  channel: SessionChannel,
 ): Promise<void> {
   const iteration = Math.max(session.workflowState.iteration, 1);
   let liveSession = refreshSession(session);

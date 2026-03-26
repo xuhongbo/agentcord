@@ -54,6 +54,10 @@ export const config = {
   // Subagent limits
   maxSubagentDepth: optionalInt('MAX_SUBAGENT_DEPTH', 3),
 
+  // Session limits & auto-archive
+  maxActiveSessionsPerProject: optionalInt('MAX_ACTIVE_SESSIONS', 20),
+  autoArchiveDays: optionalInt('AUTO_ARCHIVE_DAYS', 7),
+
   // Message cleanup
   messageRetentionDays: optionalInt('MESSAGE_RETENTION_DAYS', 0),
 

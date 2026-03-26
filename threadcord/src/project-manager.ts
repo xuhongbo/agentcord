@@ -1,7 +1,7 @@
 import { Store } from './persistence.ts';
 import type { Project, Skill, McpServer } from './types.ts';
 
-// Store shape: Record<channelId, Project>
+// Store shape: Record<categoryId, Project>
 const projectStore = new Store<Record<string, Project>>('projects.json');
 
 let projects: Record<string, Project> = {};
@@ -16,8 +16,8 @@ function saveProjects(): void {
 
 // ─── Core lookups ──────────────────────────────────────────────────────────────
 
-export function getProject(channelId: string): Project | undefined {
-  return projects[channelId];
+export function getProject(categoryId: string): Project | undefined {
+  return projects[categoryId];
 }
 
 export function getProjectByName(name: string): Project | undefined {
@@ -28,10 +28,10 @@ export function getAllProjects(): Record<string, Project> {
   return { ...projects };
 }
 
-export function getOrCreateProject(channelId: string, name: string, directory: string): Project {
-  if (!projects[channelId]) {
-    projects[channelId] = {
-      channelId,
+export function getOrCreateProject(categoryId: string, name: string, directory: string): Project {
+  if (!projects[categoryId]) {
+    projects[categoryId] = {
+      categoryId,
       name,
       directory,
       skills: [],
@@ -40,24 +40,37 @@ export function getOrCreateProject(channelId: string, name: string, directory: s
     };
     saveProjects();
   }
-  return projects[channelId];
+  return projects[categoryId];
+}
+
+// ─── History channel ───────────────────────────────────────────────────────────
+
+export function setHistoryChannelId(categoryId: string, channelId: string): void {
+  const project = projects[categoryId];
+  if (!project) return;
+  project.historyChannelId = channelId;
+  saveProjects();
+}
+
+export function getHistoryChannelId(categoryId: string): string | undefined {
+  return projects[categoryId]?.historyChannelId;
 }
 
 // ─── Personality ───────────────────────────────────────────────────────────────
 
-export function setPersonality(channelId: string, personality: string): void {
-  const project = projects[channelId];
+export function setPersonality(categoryId: string, personality: string): void {
+  const project = projects[categoryId];
   if (!project) return;
   project.personality = personality;
   saveProjects();
 }
 
-export function getPersonality(channelId: string): string | undefined {
-  return projects[channelId]?.personality;
+export function getPersonality(categoryId: string): string | undefined {
+  return projects[categoryId]?.personality;
 }
 
-export function clearPersonality(channelId: string): void {
-  const project = projects[channelId];
+export function clearPersonality(categoryId: string): void {
+  const project = projects[categoryId];
   if (!project) return;
   delete project.personality;
   saveProjects();
@@ -65,8 +78,8 @@ export function clearPersonality(channelId: string): void {
 
 // ─── Skills ────────────────────────────────────────────────────────────────────
 
-export function addSkill(channelId: string, name: string, prompt: string): void {
-  const project = projects[channelId];
+export function addSkill(categoryId: string, name: string, prompt: string): void {
+  const project = projects[categoryId];
   if (!project) return;
   const existing = project.skills.findIndex(s => s.name === name);
   if (existing >= 0) {
@@ -77,8 +90,8 @@ export function addSkill(channelId: string, name: string, prompt: string): void 
   saveProjects();
 }
 
-export function removeSkill(channelId: string, name: string): boolean {
-  const project = projects[channelId];
+export function removeSkill(categoryId: string, name: string): boolean {
+  const project = projects[categoryId];
   if (!project) return false;
   const idx = project.skills.findIndex(s => s.name === name);
   if (idx < 0) return false;
@@ -87,12 +100,12 @@ export function removeSkill(channelId: string, name: string): boolean {
   return true;
 }
 
-export function getSkills(channelId: string): Skill[] {
-  return projects[channelId]?.skills || [];
+export function getSkills(categoryId: string): Skill[] {
+  return projects[categoryId]?.skills || [];
 }
 
-export function executeSkill(channelId: string, name: string, input?: string): string | null {
-  const project = projects[channelId];
+export function executeSkill(categoryId: string, name: string, input?: string): string | null {
+  const project = projects[categoryId];
   if (!project) return null;
   const skill = project.skills.find(s => s.name === name);
   if (!skill) return null;
@@ -103,8 +116,8 @@ export function executeSkill(channelId: string, name: string, input?: string): s
 
 // ─── MCP Servers ───────────────────────────────────────────────────────────────
 
-export function addMcpServer(channelId: string, serverName: string, command: string, args?: string[]): void {
-  const project = projects[channelId];
+export function addMcpServer(categoryId: string, serverName: string, command: string, args?: string[]): void {
+  const project = projects[categoryId];
   if (!project) return;
   const existing = project.mcpServers.findIndex(s => s.name === serverName);
   const server: McpServer = {
@@ -120,8 +133,8 @@ export function addMcpServer(channelId: string, serverName: string, command: str
   saveProjects();
 }
 
-export function removeMcpServer(channelId: string, serverName: string): boolean {
-  const project = projects[channelId];
+export function removeMcpServer(categoryId: string, serverName: string): boolean {
+  const project = projects[categoryId];
   if (!project) return false;
   const idx = project.mcpServers.findIndex(s => s.name === serverName);
   if (idx < 0) return false;
@@ -130,8 +143,8 @@ export function removeMcpServer(channelId: string, serverName: string): boolean 
   return true;
 }
 
-export function getMcpServers(channelId: string): McpServer[] {
-  return projects[channelId]?.mcpServers || [];
+export function getMcpServers(categoryId: string): McpServer[] {
+  return projects[categoryId]?.mcpServers || [];
 }
 
 // ─── System Prompt Parts ───────────────────────────────────────────────────────
@@ -140,8 +153,8 @@ export function getMcpServers(channelId: string): McpServer[] {
  * Returns an array of strings to pass to providers as systemPromptParts.
  * Includes personality if set, and descriptions for each configured MCP server.
  */
-export function getSystemPromptParts(channelId: string): string[] {
-  const project = projects[channelId];
+export function getSystemPromptParts(categoryId: string): string[] {
+  const project = projects[categoryId];
   if (!project) return [];
 
   const parts: string[] = [];
