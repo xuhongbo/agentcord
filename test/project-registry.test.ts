@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,9 +16,11 @@ import {
 } from '../src/project-registry.ts';
 
 describe('project-registry', () => {
+  let dataDir: string;
+
   beforeEach(async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agentcord-project-reg-'));
-    _setDataDirForTest(dir);
+    dataDir = mkdtempSync(join(tmpdir(), 'agentcord-project-reg-'));
+    _setDataDirForTest(dataDir);
     await loadRegistry();
   });
 
@@ -42,5 +45,33 @@ describe('project-registry', () => {
 
     await removeProject('demo-renamed');
     expect(getAllRegisteredProjects()).toHaveLength(0);
+  });
+
+  it('migrates legacy projects.json object map to registry array shape', async () => {
+    const legacy = {
+      legacy: {
+        name: 'legacy',
+        directory: '/tmp/legacy',
+        categoryId: 'cat-123',
+        logChannelId: 'log-456',
+        skills: { build: 'run build' },
+        mcpServers: [{ name: 'ctx', command: 'npx', args: ['ctx'] }],
+      },
+    };
+    writeFileSync(join(dataDir, 'projects.json'), JSON.stringify(legacy, null, 2), 'utf-8');
+
+    await loadRegistry();
+
+    const project = getProjectByName('legacy');
+    expect(project).toBeDefined();
+    expect(project?.path).toBe('/tmp/legacy');
+    expect(project?.discordCategoryId).toBe('cat-123');
+    expect(project?.discordLogChannelId).toBe('log-456');
+    expect(project?.skills).toEqual({ build: 'run build' });
+    expect(project?.mcpServers).toHaveLength(1);
+
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'projects.json'), 'utf-8'));
+    expect(Array.isArray(persisted)).toBe(true);
+    expect(persisted[0]?.path).toBe('/tmp/legacy');
   });
 });
