@@ -1,4 +1,5 @@
 import { basename, resolve } from 'node:path';
+import type { CategoryChannel, Guild } from 'discord.js';
 import {
   loadRegistry,
   registerProject,
@@ -9,6 +10,10 @@ import {
   updateProjectDiscord,
 } from './project-registry.ts';
 import { getConfigValue } from './global-config.ts';
+
+type DiscordEnsureResult =
+  | { ok: true; categoryId: string; logChannelId: string }
+  | { ok: false; reason: string };
 
 function parseNameArg(args: string[]): string | undefined {
   const idx = args.indexOf('--name');
@@ -29,10 +34,33 @@ Usage:
 `);
 }
 
-async function tryEnsureDiscordResources(projectName: string): Promise<{ categoryId?: string; logChannelId?: string }> {
+async function ensureLogChannel(guild: Guild, category: CategoryChannel): Promise<string> {
+  const { ChannelType } = await import('discord.js');
+
+  const existing = category.children.cache.find(
+    ch => ch.type === ChannelType.GuildText && ch.name === 'project-logs',
+  );
+  if (existing && existing.type === ChannelType.GuildText) {
+    return existing.id;
+  }
+
+  const logChannel = await guild.channels.create({
+    name: 'project-logs',
+    type: ChannelType.GuildText,
+    parent: category.id,
+  });
+  return logChannel.id;
+}
+
+async function tryEnsureDiscordResources(projectName: string): Promise<DiscordEnsureResult> {
   const token = getConfigValue('DISCORD_TOKEN');
   const guildId = getConfigValue('DISCORD_GUILD_ID');
-  if (!token || !guildId) return {};
+  if (!token) {
+    return { ok: false, reason: 'DISCORD_TOKEN is not configured' };
+  }
+  if (!guildId) {
+    return { ok: false, reason: 'DISCORD_GUILD_ID is not configured (cannot locate target guild)' };
+  }
 
   try {
     const { Client, GatewayIntentBits, ChannelType } = await import('discord.js');
@@ -52,31 +80,24 @@ async function tryEnsureDiscordResources(projectName: string): Promise<{ categor
           type: ChannelType.GuildCategory,
         });
       }
-
-      let logChannel = (category as any).children?.cache?.find(
-        (ch: any) => ch.type === ChannelType.GuildText && ch.name === 'project-logs',
-      );
-      if (!logChannel) {
-        logChannel = await guild.channels.create({
-          name: 'project-logs',
-          type: ChannelType.GuildText,
-          parent: category.id,
-        });
+      if (category.type !== ChannelType.GuildCategory) {
+        return { ok: false, reason: `Found non-category channel named ${projectName}` };
       }
 
-      return { categoryId: category.id, logChannelId: logChannel.id };
+      const logChannelId = await ensureLogChannel(guild, category);
+      return { ok: true, categoryId: category.id, logChannelId };
     } finally {
       client.destroy();
     }
-  } catch {
-    return {};
+  } catch (err: unknown) {
+    return { ok: false, reason: (err as Error).message || 'Discord connection failed' };
   }
 }
 
-async function tryRenameDiscordCategory(oldName: string, newName: string): Promise<void> {
+async function tryRenameDiscordCategory(oldName: string, newName: string): Promise<string | null> {
   const token = getConfigValue('DISCORD_TOKEN');
   const guildId = getConfigValue('DISCORD_GUILD_ID');
-  if (!token || !guildId) return;
+  if (!token || !guildId) return 'DISCORD_TOKEN or DISCORD_GUILD_ID not configured';
 
   try {
     const { Client, GatewayIntentBits, ChannelType } = await import('discord.js');
@@ -88,14 +109,14 @@ async function tryRenameDiscordCategory(oldName: string, newName: string): Promi
       const category = guild.channels.cache.find(
         ch => ch.type === ChannelType.GuildCategory && ch.name === oldName,
       );
-      if (category) {
-        await category.setName(newName);
-      }
+      if (!category) return `No Discord category named ${oldName} found`;
+      await category.setName(newName);
+      return null;
     } finally {
       client.destroy();
     }
-  } catch {
-    // ignore
+  } catch (err: unknown) {
+    return (err as Error).message || 'Discord rename failed';
   }
 }
 
@@ -109,13 +130,14 @@ export async function handleProject(args: string[]): Promise<void> {
       const name = parseNameArg(rest) || basename(cwd);
       const project = await registerProject(name, cwd);
       const discord = await tryEnsureDiscordResources(project.name);
-      if (discord.categoryId) {
+      if (discord.ok) {
         await updateProjectDiscord(project.name, discord.categoryId, discord.logChannelId);
       }
       console.log(`✓ Project registered: ${project.name}`);
       console.log(`  Path: ${project.path}`);
-      if (!discord.categoryId) {
+      if (!discord.ok) {
         console.log('  Project registered locally. Discord category will be created when the bot starts.');
+        console.log(`  Discord sync skipped: ${discord.reason}`);
       }
       return;
     }
@@ -160,8 +182,11 @@ export async function handleProject(args: string[]): Promise<void> {
       }
       const oldName = project.name;
       await renameProject(oldName, newName);
-      await tryRenameDiscordCategory(oldName, newName);
+      const discordRenameErr = await tryRenameDiscordCategory(oldName, newName);
       console.log(`✓ Project renamed: ${oldName} -> ${newName}`);
+      if (discordRenameErr) {
+        console.log(`  Discord rename skipped: ${discordRenameErr}`);
+      }
       return;
     }
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Client, Guild, TextChannel, CategoryChannel } from 'discord.js';
 import { ChannelType } from 'discord.js';
 import { listCodexSessionsForProjects } from './codex-session-discovery.ts';
@@ -10,10 +11,26 @@ import * as sessions from './session-manager.ts';
 
 const SYNC_INTERVAL_MS = 30_000;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
+let syncInProgress = false;
+
+function makeSyncedSessionId(provider: 'claude' | 'codex', providerSessionId: string): string {
+  const digest = createHash('sha1').update(`${provider}:${providerSessionId}`).digest('hex').slice(0, 16);
+  return `${provider}-${digest}`;
+}
+
+async function runSyncSafely(client: Client): Promise<void> {
+  if (syncInProgress) return;
+  syncInProgress = true;
+  try {
+    await runSync(client);
+  } finally {
+    syncInProgress = false;
+  }
+}
 
 export function startSync(client: Client): void {
-  void runSync(client);
-  syncTimer = setInterval(() => void runSync(client), SYNC_INTERVAL_MS);
+  void runSyncSafely(client);
+  syncTimer = setInterval(() => void runSyncSafely(client), SYNC_INTERVAL_MS);
 }
 
 export function stopSync(): void {
@@ -43,6 +60,30 @@ async function ensureProjectCategory(guild: Guild, project: RegisteredProject): 
   return category;
 }
 
+async function findOrCreateSyncChannel(
+  guild: Guild,
+  category: CategoryChannel,
+  provider: 'claude' | 'codex',
+  providerSessionId: string,
+  fallbackName: string,
+  projectPath: string,
+): Promise<TextChannel> {
+  const existing = category.children.cache.find(
+    ch =>
+      ch.type === ChannelType.GuildText &&
+      typeof ch.topic === 'string' &&
+      ch.topic.includes(`Provider Session: ${providerSessionId}`),
+  ) as TextChannel | undefined;
+  if (existing) return existing;
+
+  return await guild.channels.create({
+    name: fallbackName,
+    type: ChannelType.GuildText,
+    parent: category.id,
+    topic: `${provider} session (synced) | Dir: ${projectPath} | Provider Session: ${providerSessionId}`,
+  }) as TextChannel;
+}
+
 async function syncSession(
   guild: Guild,
   project: RegisteredProject,
@@ -54,15 +95,17 @@ async function syncSession(
   const base = nameHint.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || providerSessionId.slice(0, 12);
   const channelName = `${provider}-${base}`.slice(0, 90);
 
-  const channel = await guild.channels.create({
-    name: channelName,
-    type: ChannelType.GuildText,
-    parent: category.id,
-    topic: `${provider} session (synced) | Dir: ${project.path} | Provider Session: ${providerSessionId}`,
-  }) as TextChannel;
+  const channel = await findOrCreateSyncChannel(
+    guild,
+    category,
+    provider,
+    providerSessionId,
+    channelName,
+    project.path,
+  );
 
   await sessions.createSyncedSession(
-    `${provider}-${providerSessionId.slice(0, 12)}`,
+    makeSyncedSessionId(provider, providerSessionId),
     channel.id,
     project.path,
     project.name,

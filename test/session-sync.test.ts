@@ -26,8 +26,9 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 function makeClient() {
+  const category = { id: 'cat-1', type: 4, children: { cache: { find: vi.fn().mockReturnValue(undefined) } } };
   const create = vi.fn()
-    .mockResolvedValueOnce({ id: 'cat-1', type: 4 })
+    .mockResolvedValueOnce(category)
     .mockResolvedValueOnce({ id: 'chan-1' });
   const guild = {
     channels: {
@@ -72,7 +73,7 @@ describe('session-sync', () => {
     stopSync();
 
     expect(createSyncedSessionMock).toHaveBeenCalledWith(
-      'claude-claude-1',
+      'claude-ff928f7e6e749c1c',
       'chan-1',
       '/repo/proj',
       'proj',
