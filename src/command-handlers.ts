@@ -8,12 +8,19 @@ import {
   type CategoryChannel,
 } from 'discord.js';
 import { readdirSync, statSync, createReadStream } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { config } from './config.ts';
 import * as sessions from './session-manager.ts';
 import * as projectMgr from './project-manager.ts';
+import {
+  getAllRegisteredProjects,
+  getProjectByName,
+  getProjectByPath,
+  updateProjectDiscord,
+  type RegisteredProject,
+} from './project-registry.ts';
 import * as pluginMgr from './plugin-manager.ts';
 import { listAgents, getAgent } from './agents.ts';
 import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
@@ -21,7 +28,6 @@ import { makeModeButtons } from './output-handler.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import {
   isUserAllowed,
-  projectNameFromDir,
   formatUptime,
   formatLastActivity,
   truncate,
@@ -39,40 +45,32 @@ function log(msg: string): void {
 }
 
 // Get or create project category + log channel
-async function ensureProjectCategory(
+export async function ensureProjectCategory(
   guild: Guild,
-  projectName: string,
-  directory: string,
+  project: RegisteredProject,
 ): Promise<{ category: CategoryChannel; logChannel: TextChannel }> {
-  let project = projectMgr.getProject(projectName);
-
-  // Try to find existing category
   let category: CategoryChannel | undefined;
-  if (project) {
-    category = guild.channels.cache.get(project.categoryId) as CategoryChannel | undefined;
+
+  if (project.discordCategoryId) {
+    category = guild.channels.cache.get(project.discordCategoryId) as CategoryChannel | undefined;
   }
 
   if (!category) {
-    // Look by name
     category = guild.channels.cache.find(
-      ch => ch.type === ChannelType.GuildCategory && ch.name === projectName,
+      ch => ch.type === ChannelType.GuildCategory && ch.name === project.name,
     ) as CategoryChannel | undefined;
   }
 
   if (!category) {
     category = await guild.channels.create({
-      name: projectName,
+      name: project.name,
       type: ChannelType.GuildCategory,
     });
   }
 
-  // Ensure project exists in store
-  project = projectMgr.getOrCreateProject(projectName, directory, category.id);
-
-  // Find or create log channel
   let logChannel: TextChannel | undefined;
-  if (project.logChannelId) {
-    logChannel = guild.channels.cache.get(project.logChannelId) as TextChannel | undefined;
+  if (project.discordLogChannelId) {
+    logChannel = guild.channels.cache.get(project.discordLogChannelId) as TextChannel | undefined;
   }
   if (!logChannel) {
     logChannel = category.children.cache.find(
@@ -87,7 +85,7 @@ async function ensureProjectCategory(
     });
   }
 
-  projectMgr.updateProjectCategory(projectName, category.id, logChannel.id);
+  await updateProjectDiscord(project.name, category.id, logChannel.id);
 
   return { category, logChannel };
 }
@@ -202,29 +200,36 @@ function parseTopicProviderSessionId(topic: string | null): string | undefined {
   return m?.[1]?.trim() || undefined;
 }
 
+function getBestProjectForPath(directory: string): RegisteredProject | undefined {
+  const normalized = resolve(directory);
+  const exact = getProjectByPath(normalized);
+  if (exact) return exact;
+  const projects = getAllRegisteredProjects();
+  const matches = projects.filter(project => {
+    const root = resolve(project.path);
+    return normalized === root || normalized.startsWith(`${root}${sep}`);
+  });
+  if (matches.length === 0) return undefined;
+  matches.sort((a, b) => b.path.length - a.path.length);
+  return matches[0];
+}
+
 async function handleSessionNew(interaction: ChatInputCommandInteraction): Promise<void> {
   const name = interaction.options.getString('name', true);
   const provider = (interaction.options.getString('provider') || 'claude') as ProviderName;
   const mode = resolveRequestedMode(interaction);
   const codexOptions = resolveCodexSessionOptions(interaction, provider);
-  let directory = interaction.options.getString('directory');
-
-  // If no directory specified, check if we're inside a project category
-  if (!directory) {
-    const parentId = (interaction.channel as TextChannel | null)?.parentId;
-    if (parentId) {
-      const project = projectMgr.getProjectByCategoryId(parentId);
-      if (project) directory = project.directory;
-    }
-  }
-
-  if (!directory) {
+  const projectName = interaction.options.getString('project', true);
+  const project = getProjectByName(projectName);
+  if (!project) {
     await interaction.reply({
-      content: 'No project directory found. Use `agentcord project init` to register a project, or specify a `directory` option.',
+      content: 'No project found. Register one with `agentcord project init`.',
       ephemeral: true,
     });
     return;
   }
+
+  const directory = project.path;
 
   await interaction.deferReply();
 
@@ -233,13 +238,11 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
 
   try {
     const guild = interaction.guild!;
-    const projectName = projectNameFromDir(directory);
-
-    const { category } = await ensureProjectCategory(guild, projectName, directory);
+    const { category } = await ensureProjectCategory(guild, project);
 
     // Create session first (handles name deduplication)
     // Use a temp channel ID, we'll update it after creating the channel
-    session = await sessions.createSession(name, directory, 'pending', projectName, provider, undefined, codexOptions);
+    session = await sessions.createSession(name, directory, 'pending', project.name, provider, undefined, codexOptions);
     if (mode !== 'auto') {
       sessions.setMode(session.id, mode);
       session.mode = mode;
@@ -261,7 +264,7 @@ async function handleSessionNew(interaction: ChatInputCommandInteraction): Promi
       { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
       { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: session.directory, inline: true },
-      { name: 'Project', value: projectName, inline: true },
+      { name: 'Project', value: project.name, inline: true },
     ];
     if (session.providerSessionId) {
       fields.push({ name: 'Session ID', value: `\`${session.providerSessionId}\``, inline: false });
@@ -416,17 +419,35 @@ function formatTimeAgo(mtime: number): string {
   return `${Math.floor(ago / 86400_000)}d ago`;
 }
 
+function buildProjectAutocompleteChoices(focused: string): Array<{ name: string; value: string }> {
+  return getAllRegisteredProjects()
+    .filter(project => project.name.toLowerCase().includes(focused.toLowerCase()))
+    .slice(0, 25)
+    .map(project => ({ name: `${project.name} (${project.path})`.slice(0, 100), value: project.name }));
+}
+
+export async function handleProjectAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const focused = String(interaction.options.getFocused() || '');
+  await interaction.respond(buildProjectAutocompleteChoices(focused));
+}
+
 export async function handleSessionAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  const focused = interaction.options.getFocused();
+  const focusedOption = interaction.options.getFocused(true);
+
+  if (focusedOption.name === 'project') {
+    const focused = String(focusedOption.value || '');
+    await interaction.respond(buildProjectAutocompleteChoices(focused));
+    return;
+  }
+
+  const focused = String(focusedOption.value || '').toLowerCase();
   const localSessions = discoverLocalSessions();
 
-  // Filter by typed text
   const filtered = focused
     ? localSessions.filter(s =>
-        s.id.includes(focused.toLowerCase()) || s.project.toLowerCase().includes(focused.toLowerCase()))
+        s.id.includes(focused) || s.project.toLowerCase().includes(focused))
     : localSessions;
 
-  // Discord allows max 25 choices — get first messages for top results
   const top = filtered.slice(0, 25);
   const choices = await Promise.all(
     top.map(async s => {
@@ -448,14 +469,16 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
   const provider = (interaction.options.getString('provider') || 'claude') as ProviderName;
   const mode = resolveRequestedMode(interaction);
   const codexOptions = resolveCodexSessionOptions(interaction, provider);
-  const directory = interaction.options.getString('directory');
-  if (!directory) {
+  const projectName = interaction.options.getString('project', true);
+  const project = getProjectByName(projectName);
+  if (!project) {
     await interaction.reply({
-      content: 'No project directory specified. Use the `directory` option.',
+      content: 'No project found. Register one with `agentcord project init`.',
       ephemeral: true,
     });
     return;
   }
+  const directory = project.path;
 
   // Only validate UUID format for Claude sessions
   if (provider === 'claude') {
@@ -476,9 +499,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
 
   try {
     const guild = interaction.guild!;
-    const projectName = projectNameFromDir(directory);
-
-    const { category } = await ensureProjectCategory(guild, projectName, directory);
+    const { category } = await ensureProjectCategory(guild, project);
 
     session = await sessions.createSession(
       name,
@@ -508,7 +529,7 @@ async function handleSessionResume(interaction: ChatInputCommandInteraction): Pr
       { name: 'Provider', value: PROVIDER_LABELS[provider], inline: true },
       { name: 'Mode', value: modeLabel(mode), inline: false },
       { name: 'Directory', value: session.directory, inline: true },
-      { name: 'Project', value: projectName, inline: true },
+      { name: 'Project', value: project.name, inline: true },
       { name: 'Provider Session', value: `\`${providerSessionId}\``, inline: false },
     ];
     addCodexPolicyFields(fields, codexOptions);
@@ -716,18 +737,15 @@ async function handleSessionSync(interaction: ChatInputCommandInteraction): Prom
     const directory = parseTopicDirectory(ch.topic);
     if (!directory) continue; // skip channels without directory metadata
     const providerSessionId = parseTopicProviderSessionId(ch.topic);
-    const projectName = projectNameFromDir(directory);
-
-    if (ch.parentId) {
-      projectMgr.getOrCreateProject(projectName, directory, ch.parentId);
-    }
+    const project = getBestProjectForPath(directory);
+    if (!project) continue;
 
     try {
-      const recovered = await sessions.createSession(
+      await sessions.createSession(
         sessionName,
         directory,
         ch.id,
-        projectName,
+        project.name,
         provider,
         providerSessionId,
         { recoverExisting: true },
@@ -969,13 +987,24 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
     return;
   }
 
+  const sub = interaction.options.getSubcommand();
+  if (sub === 'list') {
+    const projects = getAllRegisteredProjects();
+    if (projects.length === 0) {
+      await interaction.reply({ content: 'No mounted projects yet. Run `agentcord project init` locally.', ephemeral: true });
+      return;
+    }
+    const lines = projects.map(p => `• **${p.name}**\n  - Path: \`${p.path}\`\n  - Discord: ${p.discordCategoryId ? 'ready' : 'pending'}`);
+    await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+    return;
+  }
+
   const session = sessions.getSessionByChannel(interaction.channelId);
   if (!session) {
     await interaction.reply({ content: 'No session in this channel. Run this in a session channel.', ephemeral: true });
     return;
   }
 
-  const sub = interaction.options.getSubcommand();
   const projectName = session.projectName;
 
   switch (sub) {

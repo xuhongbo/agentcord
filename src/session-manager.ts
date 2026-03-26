@@ -87,6 +87,7 @@ export async function loadSessions(): Promise<void> {
       monitorProviderSessionId: s.monitorProviderSessionId,
       workflowState: s.workflowState ?? createDefaultWorkflowState(),
       isGenerating: false,
+      source: s.source ?? 'remote',
     });
     channelToSession.set(s.channelId, s.id);
   }
@@ -123,6 +124,7 @@ async function persistSessionsNow(): Promise<void> {
       lastActivity: s.lastActivity,
       messageCount: s.messageCount,
       totalCost: s.totalCost,
+      source: s.source,
     });
   }
   await sessionStore.write(data);
@@ -209,6 +211,7 @@ export async function createSession(
     lastActivity: Date.now(),
     messageCount: 0,
     totalCost: 0,
+    source: 'remote',
   };
 
   sessions.set(id, session);
@@ -217,6 +220,51 @@ export async function createSession(
     await saveSessions();
   }
 
+  return session;
+}
+
+export async function createSyncedSession(
+  id: string,
+  channelId: string,
+  directory: string,
+  projectName: string,
+  provider: ProviderName,
+  providerSessionId: string,
+): Promise<Session> {
+  const resolvedDir = resolvePath(directory);
+  if (!existsSync(resolvedDir)) {
+    throw new Error(`Directory does not exist: ${resolvedDir}`);
+  }
+
+  if (sessions.has(id)) {
+    throw new Error(`Session "${id}" already exists`);
+  }
+
+  const session: Session = {
+    id,
+    channelId,
+    directory: resolvedDir,
+    projectName,
+    provider,
+    providerSessionId,
+    verbose: false,
+    mode: 'auto',
+    monitorGoal: undefined,
+    monitorProviderSessionId: undefined,
+    workflowState: createDefaultWorkflowState(),
+    isGenerating: false,
+    createdAt: Date.now(),
+    lastActivity: Date.now(),
+    messageCount: 0,
+    totalCost: 0,
+    source: 'local-sync',
+  };
+
+  sessions.set(id, session);
+  if (!isPlaceholderChannelId(channelId)) {
+    channelToSession.set(channelId, id);
+  }
+  await saveSessions();
   return session;
 }
 

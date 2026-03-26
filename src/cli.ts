@@ -19,6 +19,11 @@ switch (command) {
     await startBot();
     break;
   }
+  case 'project': {
+    const { handleProject } = await import('./project-cli.ts');
+    await handleProject(process.argv.slice(3));
+    break;
+  }
   case 'daemon': {
     const { handleDaemon } = await import('./daemon.ts');
     await handleDaemon(process.argv[3]);
@@ -37,6 +42,7 @@ switch (command) {
     agentcord config set <k> <v>   Write a config value
     agentcord config list          List all config values
     agentcord config path          Show config file path
+    agentcord project <subcommand> Manage mounted projects
     agentcord daemon               Manage background service (install/uninstall/status)
     agentcord help                 Show this help message
 

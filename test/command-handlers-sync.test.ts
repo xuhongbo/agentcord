@@ -15,6 +15,11 @@ const getProjectByCategoryIdMock = vi.fn();
 const getProjectMock = vi.fn();
 const updateProjectCategoryMock = vi.fn();
 
+const getAllRegisteredProjectsMock = vi.fn();
+const getProjectByNameRegistryMock = vi.fn();
+const getProjectByPathRegistryMock = vi.fn();
+const updateProjectDiscordMock = vi.fn();
+
 vi.mock('../src/global-config.ts', () => ({
   getConfigValue: (key: string) => process.env[key],
   setConfigValue: vi.fn(),
@@ -61,6 +66,14 @@ vi.mock('../src/project-manager.ts', () => ({
   addMcpServer: vi.fn(),
   removeMcpServer: vi.fn(),
   listMcpServers: vi.fn(),
+}));
+
+
+vi.mock('../src/project-registry.ts', () => ({
+  getAllRegisteredProjects: getAllRegisteredProjectsMock,
+  getProjectByName: getProjectByNameRegistryMock,
+  getProjectByPath: getProjectByPathRegistryMock,
+  updateProjectDiscord: updateProjectDiscordMock,
 }));
 
 vi.mock('../src/plugin-manager.ts', () => ({
@@ -111,6 +124,10 @@ describe('/session sync codex recovery', () => {
     getProjectByCategoryIdMock.mockReset();
     getProjectMock.mockReset();
     updateProjectCategoryMock.mockReset();
+    getAllRegisteredProjectsMock.mockReset();
+    getProjectByNameRegistryMock.mockReset();
+    getProjectByPathRegistryMock.mockReset();
+    updateProjectDiscordMock.mockReset();
 
     process.env = { ...envSnapshot };
     process.env.DISCORD_TOKEN = 'test-token';
@@ -128,6 +145,7 @@ describe('/session sync codex recovery', () => {
     getAllSessionsMock.mockReturnValue([]);
     listTmuxSessionsMock.mockResolvedValue([]);
     createSessionMock.mockResolvedValue({ id: 'fix-auth', channelId: 'chan-1' });
+    getProjectByPathRegistryMock.mockReturnValue({ name: 'work-repo', path: '/tmp/work-repo' });
 
     const codexChannel = {
       id: 'chan-1',
@@ -168,7 +186,6 @@ describe('/session sync codex recovery', () => {
       'thr_abc123',
       { recoverExisting: true },
     );
-    expect(getOrCreateProjectMock).toHaveBeenCalledWith('work-repo', '/tmp/work-repo', 'cat-1');
     expect(interaction.editReply).toHaveBeenCalledWith('Synced 1 orphaned session(s).');
   });
 
@@ -211,8 +228,7 @@ describe('/session sync codex recovery', () => {
   });
 
   it('applies the requested initial mode when creating a new session', async () => {
-    getProjectMock.mockReturnValue(undefined);
-    getOrCreateProjectMock.mockReturnValue({ categoryId: 'cat-1', logChannelId: 'log-1' });
+    getProjectByNameRegistryMock.mockReturnValue({ name: 'work-repo', path: '/tmp/work-repo', discordCategoryId: undefined, discordLogChannelId: undefined });
     createSessionMock.mockResolvedValue({
       id: 'bench-run',
       directory: '/tmp/work-repo',
@@ -248,7 +264,7 @@ describe('/session sync codex recovery', () => {
           if (name === 'name') return 'bench-run';
           if (name === 'provider') return 'codex';
           if (name === 'mode') return 'monitor';
-          if (name === 'directory') return '/tmp/work-repo';
+          if (name === 'project') return 'work-repo';
           if (name === 'sandbox-mode' || name === 'approval-policy') return null;
           if (required) throw new Error(`Unexpected required option: ${name}`);
           return null;
