@@ -53,7 +53,15 @@ const sessions = new Map<string, ThreadSession>();
 // internal session id → channelId
 const idToChannelId = new Map<string, string>();
 
+// categoryId → Set<channelId> (索引，用于快速查找)
+const sessionsByCategory = new Map<string, Set<string>>();
+
+// Session 运行时状态（不持久化）
+const sessionControllers = new Map<string, AbortController>();
+const sessionAbortReasons = new Map<string, 'user' | 'watchdog'>();
+
 let saveQueue: Promise<void> = Promise.resolve();
+let saveTimer: NodeJS.Timeout | null = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -104,6 +112,12 @@ export async function loadSessions(): Promise<void> {
       isGenerating: false,
     });
     idToChannelId.set(s.id, s.channelId);
+
+    // 维护 category 索引
+    if (!sessionsByCategory.has(s.categoryId)) {
+      sessionsByCategory.set(s.categoryId, new Set());
+    }
+    sessionsByCategory.get(s.categoryId)!.add(s.channelId);
   }
 
   if (cleaned) {
@@ -132,6 +146,7 @@ async function persistSessionsNow(): Promise<void> {
       mode: s.mode,
       agentPersona: s.agentPersona,
       verbose: s.verbose || false,
+      claudePermissionMode: s.claudePermissionMode,
       monitorGoal: s.monitorGoal,
       monitorProviderSessionId: s.monitorProviderSessionId,
       workflowState: s.workflowState,
@@ -157,6 +172,24 @@ function saveSessions(): Promise<void> {
   return saveQueue;
 }
 
+/** 延迟批量保存（1秒内的多次调用会合并） */
+function debouncedSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveSessions();
+  }, 1000);
+}
+
+/** 立即保存（用于关键操作） */
+function saveSessionsImmediate(): Promise<void> {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  return saveSessions();
+}
+
 // ─── Create / CRUD ────────────────────────────────────────────────────────────
 
 export interface CreateSessionParams {
@@ -172,6 +205,7 @@ export interface CreateSessionParams {
   parentChannelId?: string;      // For subagents: parent session's TextChannel ID
   subagentDepth?: number;
   mode?: SessionMode;
+  claudePermissionMode?: 'bypass' | 'normal';
 }
 
 export async function createSession(params: CreateSessionParams): Promise<ThreadSession> {
@@ -187,6 +221,7 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     parentChannelId,
     subagentDepth = 0,
     mode = config.defaultMode,
+    claudePermissionMode,
   } = params;
 
   const resolvedDir = resolvePath(params.directory);
@@ -224,6 +259,7 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     mode,
     agentPersona: undefined,
     verbose: false,
+    claudePermissionMode,
     monitorGoal: undefined,
     monitorProviderSessionId: undefined,
     workflowState: createDefaultWorkflowState(),
@@ -236,7 +272,14 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
 
   sessions.set(channelId, session);
   idToChannelId.set(id, channelId);
-  await saveSessions();
+
+  // 维护 category 索引
+  if (!sessionsByCategory.has(categoryId)) {
+    sessionsByCategory.set(categoryId, new Set());
+  }
+  sessionsByCategory.get(categoryId)!.add(channelId);
+
+  await saveSessionsImmediate();
 
   return session;
 }
@@ -256,11 +299,13 @@ export const getSessionByThread = getSessionByChannel;
 
 /** List all sessions under a project category. */
 export function getSessionsByCategory(categoryId: string): ThreadSession[] {
+  const channelIds = sessionsByCategory.get(categoryId);
+  if (!channelIds) return [];
+
   const result: ThreadSession[] = [];
-  for (const [, session] of sessions) {
-    if (session.categoryId === categoryId) {
-      result.push(session);
-    }
+  for (const channelId of channelIds) {
+    const session = sessions.get(channelId);
+    if (session) result.push(session);
   }
   return result;
 }
@@ -273,13 +318,27 @@ export async function endSession(id: string): Promise<void> {
   const session = getSession(id);
   if (!session) throw new Error(`Session "${id}" not found`);
 
-  if (session.isGenerating && (session as any)._controller) {
-    (session as any)._controller.abort();
+  // 清理运行时状态
+  const controller = sessionControllers.get(session.id);
+  if (controller && session.isGenerating) {
+    controller.abort();
   }
+  sessionControllers.delete(session.id);
+  sessionAbortReasons.delete(session.id);
 
+  // 清理索引
   idToChannelId.delete(session.id);
   sessions.delete(session.channelId);
-  await saveSessions();
+
+  const categorySet = sessionsByCategory.get(session.categoryId);
+  if (categorySet) {
+    categorySet.delete(session.channelId);
+    if (categorySet.size === 0) {
+      sessionsByCategory.delete(session.categoryId);
+    }
+  }
+
+  await saveSessionsImmediate();
 }
 
 // ─── State management ─────────────────────────────────────────────────────────
@@ -292,7 +351,7 @@ export function setMode(sessionId: string, mode: SessionMode): void {
       session.monitorProviderSessionId = undefined;
     }
     session.workflowState = createDefaultWorkflowState();
-    saveSessions();
+    debouncedSave();
   }
 }
 
@@ -300,7 +359,7 @@ export function setVerbose(sessionId: string, verbose: boolean): void {
   const session = getSession(sessionId);
   if (session) {
     session.verbose = verbose;
-    saveSessions();
+    debouncedSave();
   }
 }
 
@@ -308,7 +367,7 @@ export function setModel(sessionId: string, model: string): void {
   const session = getSession(sessionId);
   if (session) {
     session.model = model;
-    saveSessions();
+    debouncedSave();
   }
 }
 
@@ -316,7 +375,7 @@ export function setAgentPersona(sessionId: string, persona: string | undefined):
   const session = getSession(sessionId);
   if (session) {
     session.agentPersona = persona;
-    saveSessions();
+    debouncedSave();
   }
 }
 
@@ -328,7 +387,7 @@ export function setMonitorGoal(sessionId: string, goal: string | undefined): voi
       session.monitorProviderSessionId = undefined;
     }
     session.workflowState = createDefaultWorkflowState();
-    saveSessions();
+    debouncedSave();
   }
 }
 
@@ -347,14 +406,14 @@ export function updateWorkflowState(
     ...next,
     updatedAt: Date.now(),
   };
-  saveSessions();
+  debouncedSave();
 }
 
 export function resetWorkflowState(sessionId: string): void {
   const session = getSession(sessionId);
   if (!session) return;
   session.workflowState = createDefaultWorkflowState();
-  saveSessions();
+  debouncedSave();
 }
 
 // ─── System prompt building ───────────────────────────────────────────────────
@@ -386,6 +445,28 @@ function buildMonitorSystemPromptParts(session: ThreadSession): string[] {
   return parts;
 }
 
+// ─── Provider options builder ─────────────────────────────────────────────────
+
+function buildProviderOptions(
+  session: ThreadSession,
+  controller: AbortController,
+  isMonitor = false,
+): import('./providers/types.ts').ProviderSessionOptions {
+  return {
+    directory: session.directory,
+    providerSessionId: isMonitor ? session.monitorProviderSessionId : session.providerSessionId,
+    model: session.model,
+    sandboxMode: config.codexSandboxMode,
+    approvalPolicy: config.codexApprovalPolicy,
+    networkAccessEnabled: config.codexNetworkAccessEnabled,
+    webSearchMode: config.codexWebSearchMode,
+    modelReasoningEffort: config.codexReasoningEffort || undefined,
+    claudePermissionMode: session.claudePermissionMode ?? config.claudePermissionMode,
+    systemPromptParts: isMonitor ? buildMonitorSystemPromptParts(session) : buildSystemPromptParts(session),
+    abortController: controller,
+  };
+}
+
 // ─── Provider-delegated prompt sending ───────────────────────────────────────
 
 export async function* sendPrompt(
@@ -397,31 +478,19 @@ export async function* sendPrompt(
   if (session.isGenerating) throw new Error('Session is already generating');
 
   const controller = new AbortController();
-  (session as any)._controller = controller;
+  sessionControllers.set(session.id, controller);
   session.isGenerating = true;
   session.lastActivity = Date.now();
 
   const provider = await ensureProvider(session.provider);
-  const systemPromptParts = buildSystemPromptParts(session);
 
   try {
-    const stream = provider.sendPrompt(prompt, {
-      directory: session.directory,
-      providerSessionId: session.providerSessionId,
-      model: session.model,
-      sandboxMode: config.codexSandboxMode,
-      approvalPolicy: config.codexApprovalPolicy,
-      networkAccessEnabled: config.codexNetworkAccessEnabled,
-      webSearchMode: config.codexWebSearchMode,
-      modelReasoningEffort: config.codexReasoningEffort || undefined,
-      systemPromptParts,
-      abortController: controller,
-    });
+    const stream = provider.sendPrompt(prompt, buildProviderOptions(session, controller));
 
     for await (const event of stream) {
       if (event.type === 'session_init') {
         session.providerSessionId = event.providerSessionId || undefined;
-        await saveSessions();
+        debouncedSave();
       }
       if (event.type === 'result') {
         session.totalCost += event.costUsd;
@@ -439,8 +508,8 @@ export async function* sendPrompt(
   } finally {
     session.isGenerating = false;
     session.lastActivity = Date.now();
-    delete (session as any)._controller;
-    await saveSessions();
+    sessionControllers.delete(session.id);
+    await saveSessionsImmediate();
   }
 }
 
@@ -452,31 +521,19 @@ export async function* continueSession(
   if (session.isGenerating) throw new Error('Session is already generating');
 
   const controller = new AbortController();
-  (session as any)._controller = controller;
+  sessionControllers.set(session.id, controller);
   session.isGenerating = true;
   session.lastActivity = Date.now();
 
   const provider = await ensureProvider(session.provider);
-  const systemPromptParts = buildSystemPromptParts(session);
 
   try {
-    const stream = provider.continueSession({
-      directory: session.directory,
-      providerSessionId: session.providerSessionId,
-      model: session.model,
-      sandboxMode: config.codexSandboxMode,
-      approvalPolicy: config.codexApprovalPolicy,
-      networkAccessEnabled: config.codexNetworkAccessEnabled,
-      webSearchMode: config.codexWebSearchMode,
-      modelReasoningEffort: config.codexReasoningEffort || undefined,
-      systemPromptParts,
-      abortController: controller,
-    });
+    const stream = provider.continueSession(buildProviderOptions(session, controller));
 
     for await (const event of stream) {
       if (event.type === 'session_init') {
         session.providerSessionId = event.providerSessionId || undefined;
-        await saveSessions();
+        debouncedSave();
       }
       if (event.type === 'result') {
         session.totalCost += event.costUsd;
@@ -494,8 +551,8 @@ export async function* continueSession(
   } finally {
     session.isGenerating = false;
     session.lastActivity = Date.now();
-    delete (session as any)._controller;
-    await saveSessions();
+    sessionControllers.delete(session.id);
+    await saveSessionsImmediate();
   }
 }
 
@@ -507,26 +564,15 @@ export async function* sendMonitorPrompt(
   if (!session) throw new Error(`Session "${sessionId}" not found`);
 
   const provider = await ensureProvider(session.provider);
-  const systemPromptParts = buildMonitorSystemPromptParts(session);
   session.lastActivity = Date.now();
 
-  const stream = provider.sendPrompt(prompt, {
-    directory: session.directory,
-    providerSessionId: session.monitorProviderSessionId,
-    model: session.model,
-    sandboxMode: config.codexSandboxMode,
-    approvalPolicy: config.codexApprovalPolicy,
-    networkAccessEnabled: config.codexNetworkAccessEnabled,
-    webSearchMode: config.codexWebSearchMode,
-    modelReasoningEffort: config.codexReasoningEffort || undefined,
-    systemPromptParts,
-    abortController: new AbortController(),
-  });
+  const controller = new AbortController();
+  const stream = provider.sendPrompt(prompt, buildProviderOptions(session, controller, true));
 
   for await (const event of stream) {
     if (event.type === 'session_init') {
       session.monitorProviderSessionId = event.providerSessionId || undefined;
-      await saveSessions();
+      debouncedSave();
     }
     if (event.type === 'result') {
       session.totalCost += event.costUsd;
@@ -535,7 +581,7 @@ export async function* sendMonitorPrompt(
   }
 
   session.lastActivity = Date.now();
-  await saveSessions();
+  debouncedSave();
 }
 
 // ─── Abort management ─────────────────────────────────────────────────────────
@@ -548,8 +594,8 @@ export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watc
   const session = getSession(sessionId);
   if (!session) return false;
 
-  const controller = (session as any)._controller as AbortController | undefined;
-  (session as any)._abortReason = reason;
+  const controller = sessionControllers.get(session.id);
+  sessionAbortReasons.set(session.id, reason);
 
   if (controller) {
     controller.abort();
@@ -557,8 +603,8 @@ export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watc
 
   if (session.isGenerating) {
     session.isGenerating = false;
-    delete (session as any)._controller;
-    saveSessions();
+    sessionControllers.delete(session.id);
+    debouncedSave();
     return true;
   }
 
@@ -568,7 +614,7 @@ export function abortSessionWithReason(sessionId: string, reason: 'user' | 'watc
 export function consumeAbortReason(sessionId: string): 'user' | 'watchdog' | undefined {
   const session = getSession(sessionId);
   if (!session) return undefined;
-  const reason = (session as any)._abortReason as 'user' | 'watchdog' | undefined;
-  delete (session as any)._abortReason;
+  const reason = sessionAbortReasons.get(session.id);
+  sessionAbortReasons.delete(session.id);
   return reason;
 }
