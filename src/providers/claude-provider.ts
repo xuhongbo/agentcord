@@ -43,6 +43,7 @@ export class ClaudeProvider implements Provider {
     options: ProviderSessionOptions,
   ): AsyncGenerator<ProviderEvent> {
     const systemPrompt = buildClaudeSystemPrompt(options.systemPromptParts);
+    const isBypass = options.claudePermissionMode === 'bypass';
 
     function buildQueryPrompt(): string | AsyncIterable<any> {
       if (typeof prompt === 'string') return prompt;
@@ -68,8 +69,8 @@ export class ClaudeProvider implements Provider {
           cwd: options.directory,
           resume: resumeId,
           abortController: options.abortController,
-          permissionMode: 'bypassPermissions',
-          allowDangerouslySkipPermissions: true,
+          permissionMode: isBypass ? 'bypassPermissions' : 'default',
+          ...(isBypass ? { allowDangerouslySkipPermissions: true } : {}),
           model: options.model,
           systemPrompt,
           includePartialMessages: true,
@@ -98,6 +99,7 @@ export class ClaudeProvider implements Provider {
     options: ProviderSessionOptions,
   ): AsyncGenerator<ProviderEvent> {
     const systemPrompt = buildClaudeSystemPrompt(options.systemPromptParts);
+    const isBypass = options.claudePermissionMode === 'bypass';
 
     let retried = false;
     let resumeId = options.providerSessionId;
@@ -110,8 +112,8 @@ export class ClaudeProvider implements Provider {
           cwd: options.directory,
           ...(resumeId ? { continue: true, resume: resumeId } : {}),
           abortController: options.abortController,
-          permissionMode: 'bypassPermissions',
-          allowDangerouslySkipPermissions: true,
+          permissionMode: isBypass ? 'bypassPermissions' : 'default',
+          ...(isBypass ? { allowDangerouslySkipPermissions: true } : {}),
           model: options.model,
           systemPrompt,
           includePartialMessages: true,

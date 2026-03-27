@@ -126,6 +126,7 @@ export interface Config {
   dataDir: string;
   defaultProvider: ProviderName;
   defaultMode: SessionMode;
+  claudePermissionMode: ClaudePermissionMode;
   maxSubagentDepth: number;
   maxActiveSessionsPerProject: number;
   autoArchiveDays: number;

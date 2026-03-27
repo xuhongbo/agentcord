@@ -37,6 +37,8 @@ export type ProviderEvent =
 
 // ── Provider Interface ──────────────────────────────────────────
 
+export type ClaudePermissionMode = 'bypass' | 'normal';
+
 export interface ProviderSessionOptions {
   directory: string;
   providerSessionId?: string;
@@ -46,6 +48,7 @@ export interface ProviderSessionOptions {
   networkAccessEnabled?: boolean;
   webSearchMode?: 'disabled' | 'cached' | 'live';
   modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  claudePermissionMode?: ClaudePermissionMode;
   systemPromptParts: string[];
   abortController: AbortController;
 }
