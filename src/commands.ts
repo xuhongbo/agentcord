@@ -83,6 +83,14 @@ const commands = [
           { name: '🛡️ 普通：危险操作前询问', value: 'normal' },
           { name: '🧠 监督：持续推进直到完成', value: 'monitor' },
         ))
+      .addStringOption(opt => opt
+        .setName('claude-permissions')
+        .setDescription('Claude 权限模式（仅 Claude provider）')
+        .setRequired(false)
+        .addChoices(
+          { name: '🛡️ 普通：需要用户确认操作', value: 'normal' },
+          { name: '⚡ 绕过：完全自主（高风险）', value: 'bypass' },
+        ))
       .addStringOption(opt => opt.setName('directory').setDescription('覆盖默认工作目录').setRequired(false)))
     .addSubcommand(sub => sub
       .setName('list')
@@ -175,6 +183,60 @@ const commands = [
       .setName('kill')
       .setDescription('结束一个运行中的进程')
       .addIntegerOption(opt => opt.setName('pid').setDescription('进程编号').setRequired(true))),
+
+  // ── 快捷命令（无 subcommand） ─────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName('spawn')
+    .setDescription('创建新的代理会话（快捷方式）')
+    .addStringOption(opt => opt.setName('label').setDescription('会话名称，例如 fix-login-bug').setRequired(true))
+    .addStringOption(opt => opt
+      .setName('provider')
+      .setDescription('选择代理提供方')
+      .setRequired(false)
+      .addChoices(
+        { name: 'Claude（默认）', value: 'claude' },
+        { name: 'Codex', value: 'codex' },
+      ))
+    .addStringOption(opt => opt
+      .setName('mode')
+      .setDescription('执行模式')
+      .setRequired(false)
+      .addChoices(
+        { name: '⚡ 自动：全自主执行', value: 'auto' },
+        { name: '📋 计划：先规划再修改', value: 'plan' },
+        { name: '🛡️ 普通：危险操作前询问', value: 'normal' },
+        { name: '🧠 监督：持续推进直到完成', value: 'monitor' },
+      ))
+    .addStringOption(opt => opt
+      .setName('claude-permissions')
+      .setDescription('Claude 权限模式（仅 Claude provider）')
+      .setRequired(false)
+      .addChoices(
+        { name: '🛡️ 普通：需要用户确认操作', value: 'normal' },
+        { name: '⚡ 绕过：完全自主（高风险）', value: 'bypass' },
+      ))
+    .addStringOption(opt => opt.setName('directory').setDescription('覆盖默认工作目录').setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('停止当前会话的生成'),
+
+  new SlashCommandBuilder()
+    .setName('end')
+    .setDescription('结束当前会话'),
+
+  new SlashCommandBuilder()
+    .setName('run')
+    .setDescription('在当前会话下创建子代理线程')
+    .addStringOption(opt => opt.setName('label').setDescription('子代理名称').setRequired(true))
+    .addStringOption(opt => opt
+      .setName('provider')
+      .setDescription('选择代理提供方')
+      .setRequired(false)
+      .addChoices(
+        { name: 'Claude（默认）', value: 'claude' },
+        { name: 'Codex', value: 'codex' },
+      )),
 ];
 
 export async function registerCommands(): Promise<void> {

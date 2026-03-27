@@ -380,6 +380,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
   const label = interaction.options.getString('label', true);
   const provider = (interaction.options.getString('provider') || config.defaultProvider) as ProviderName;
   const mode = (interaction.options.getString('mode') || config.defaultMode) as SessionMode;
+  const claudePermissionMode = (interaction.options.getString('claude-permissions') || config.claudePermissionMode) as 'bypass' | 'normal';
   const directory = interaction.options.getString('directory') || project.directory;
 
   await interaction.deferReply();
@@ -414,6 +415,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       directory,
       type: 'persistent',
       mode,
+      claudePermissionMode: provider === 'claude' ? claudePermissionMode : undefined,
     });
   } catch (err: unknown) {
     // Clean up channel if session creation fails
@@ -436,6 +438,13 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     );
 
+  if (provider === 'claude' && session.claudePermissionMode) {
+    const permLabel = session.claudePermissionMode === 'bypass'
+      ? '⚡ 绕过权限（完全自主）'
+      : '🛡️ 普通权限（需要确认）';
+    welcomeEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
+  }
+
   await sessionChannel.send({
     embeds: [welcomeEmbed],
     components: [makeModeButtons(session.id, mode)],
@@ -451,6 +460,13 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       { name: 'Mode', value: MODE_LABELS[mode], inline: false },
       { name: 'Directory', value: `\`${session.directory}\``, inline: false },
     );
+
+  if (provider === 'claude' && session.claudePermissionMode) {
+    const permLabel = session.claudePermissionMode === 'bypass'
+      ? '⚡ 绕过权限（完全自主）'
+      : '🛡️ 普通权限（需要确认）';
+    embed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
+  }
 
   await interaction.editReply({ embeds: [embed] });
   log(`Agent "${label}" (${provider}) spawned by ${interaction.user.tag} in category ${categoryId}`);
@@ -764,4 +780,26 @@ async function handleShellKill(interaction: ChatInputCommandInteraction): Promis
   const pid = interaction.options.getInteger('pid', true);
   const killed = killProcess(pid);
   await interaction.reply({ content: killed ? `Process ${pid} killed.` : `Process ${pid} not found.`, ephemeral: true });
+}
+
+// ── 快捷命令处理器 ────────────────────────────────────────────────────
+
+export async function handleSpawnShortcut(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 复用 handleAgentSpawn 的逻辑
+  await handleAgentSpawn(interaction);
+}
+
+export async function handleStopShortcut(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 复用 handleAgentStop 的逻辑
+  await handleAgentStop(interaction);
+}
+
+export async function handleEndShortcut(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 复用 handleAgentEnd 的逻辑
+  await handleAgentEnd(interaction);
+}
+
+export async function handleRunShortcut(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 复用 handleSubagentRun 的逻辑
+  await handleSubagentRun(interaction);
 }

@@ -14,6 +14,10 @@ import {
   handleAgent,
   handleSubagent,
   handleShell,
+  handleSpawnShortcut,
+  handleStopShortcut,
+  handleEndShortcut,
+  handleRunShortcut,
   setLogger,
 } from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
@@ -114,6 +118,11 @@ export async function startBot(): Promise<void> {
           case 'agent': return await handleAgent(interaction);
           case 'subagent': return await handleSubagent(interaction);
           case 'shell': return await handleShell(interaction);
+          // 快捷命令
+          case 'spawn': return await handleSpawnShortcut(interaction);
+          case 'stop': return await handleStopShortcut(interaction);
+          case 'end': return await handleEndShortcut(interaction);
+          case 'run': return await handleRunShortcut(interaction);
         }
       }
 
