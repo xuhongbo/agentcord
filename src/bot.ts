@@ -34,6 +34,7 @@ import { loadProjects } from './project-manager.ts';
 import { runSubagentWatchdog } from './subagent-manager.ts';
 import { loadArchived, checkAutoArchive } from './archive-manager.ts';
 import { startSync, stopSync } from './session-sync.ts';
+import { startHealthMonitor, stopHealthMonitor, setBotStartTime } from './health-monitor.ts';
 
 let client: Client;
 let logChannel: TextChannel | null = null;
@@ -83,7 +84,7 @@ function releaseLock(): void {
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 
-function botLog(msg: string): void {
+export function botLog(msg: string): void {
   const timestamp = new Date().toISOString().slice(11, 19);
   const formatted = `\`[${timestamp}]\` ${msg}`;
   console.log(`[${timestamp}] ${msg}`);
@@ -246,7 +247,13 @@ export async function startBot(): Promise<void> {
 
     botLog(`Bot online. ${getAllSessions().length} session(s) restored.`);
     updatePresence();
+    setBotStartTime(Date.now());
     startSync(client);
+
+    // Start health monitoring
+    if (config.healthReportEnabled) {
+      startHealthMonitor(client);
+    }
 
     // Presence update every 30s
     setInterval(updatePresence, 30_000);
@@ -283,6 +290,7 @@ export async function startBot(): Promise<void> {
     botLog('Shutting down...');
     flushLogs();
     stopSync();
+    stopHealthMonitor();
     releaseLock();
     client.destroy();
     process.exit(0);

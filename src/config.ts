@@ -73,6 +73,11 @@ export const config = {
   anthropicBaseUrl: optional('ANTHROPIC_BASE_URL', ''),
 
   sessionSyncIntervalMs: optionalInt('SESSION_SYNC_INTERVAL_MS', 30_000),
+
+  healthReportIntervalMs: optionalInt('HEALTH_REPORT_INTERVAL_MS', 600_000),
+  healthReportEnabled: optionalBool('HEALTH_REPORT_ENABLED', true),
+  healthCheckStuckThresholdMs: optionalInt('HEALTH_CHECK_STUCK_THRESHOLD_MS', 1_800_000),
+  healthCheckIdleThresholdMs: optionalInt('HEALTH_CHECK_IDLE_THRESHOLD_MS', 7_200_000),
 } as const;
 
 if (config.anthropicApiKey) process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
