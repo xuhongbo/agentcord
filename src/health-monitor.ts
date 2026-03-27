@@ -338,7 +338,7 @@ export function formatStatusReport(metrics: HealthMetrics): string {
 
 // ─── Monitor Control ──────────────────────────────────────────────────────
 
-export function startHealthMonitor(client: Client): void {
+export function startHealthMonitor(client: Client, logFn: (msg: string) => void): void {
   if (!config.healthReportEnabled) return;
 
   const interval = config.healthReportIntervalMs;
@@ -348,9 +348,7 @@ export function startHealthMonitor(client: Client): void {
       const metrics = collectMetrics();
       const report = formatStatusReport(metrics);
 
-      // Import botLog dynamically to avoid circular dependency
-      const { botLog } = await import('./bot.ts');
-      botLog(report);
+      logFn(report);
 
       // Reset activity counters
       lastReportTime = Date.now();

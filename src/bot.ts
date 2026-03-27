@@ -95,14 +95,31 @@ export function botLog(msg: string): void {
   }
 }
 
-async function flushLogs(): Promise<void> {
+export async function flushLogs(): Promise<void> {
   logTimer = null;
   if (!logChannel || logBuffer.length === 0) return;
-  const batch = logBuffer.splice(0, logBuffer.length).join('\n');
-  try {
-    await logChannel.send(batch);
-  } catch {
-    // Log channel may have been deleted
+  const lines = logBuffer.splice(0, logBuffer.length);
+
+  // Split into chunks that fit Discord's 2000-char limit
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of lines) {
+    const separator = current ? '\n' : '';
+    if (current.length + separator.length + line.length > 1900) {
+      if (current) chunks.push(current);
+      current = line.length > 1900 ? line.slice(0, 1900) : line;
+    } else {
+      current += separator + line;
+    }
+  }
+  if (current) chunks.push(current);
+
+  for (const chunk of chunks) {
+    try {
+      await logChannel.send(chunk);
+    } catch {
+      // Log channel may have been deleted or bot lost permissions
+    }
   }
 }
 
@@ -252,7 +269,7 @@ export async function startBot(): Promise<void> {
 
     // Start health monitoring
     if (config.healthReportEnabled) {
-      startHealthMonitor(client);
+      startHealthMonitor(client, botLog);
     }
 
     // Presence update every 30s
@@ -311,12 +328,19 @@ export async function startBot(): Promise<void> {
 
   client.on('shardResume', (shardId, replayedEvents) => {
     botLog(`Shard ${shardId} resumed (${replayedEvents} events replayed).`);
+    // Refresh logChannel reference after reconnect
+    const guild = client.guilds.cache.first();
+    if (guild) {
+      logChannel = guild.channels.cache.find(
+        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
+      ) as TextChannel | undefined ?? logChannel;
+    }
   });
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     botLog('Shutting down...');
-    flushLogs();
+    await flushLogs();
     stopSync();
     stopHealthMonitor();
     releaseLock();
@@ -324,13 +348,13 @@ export async function startBot(): Promise<void> {
     process.exit(0);
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { shutdown().catch(() => process.exit(0)); });
+  process.on('SIGTERM', () => { shutdown().catch(() => process.exit(0)); });
 
-  process.on('uncaughtException', err => {
+  process.on('uncaughtException', async (err) => {
     console.error('Uncaught exception:', err);
     botLog(`Uncaught exception: ${err.message} — restarting`);
-    flushLogs();
+    await flushLogs();
     releaseLock();
     process.exit(1);
   });
