@@ -3,6 +3,19 @@ import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 
+let rgAvailable: boolean | null = null;
+
+function isRipgrepAvailable(): boolean {
+  if (rgAvailable !== null) return rgAvailable;
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    rgAvailable = true;
+  } catch {
+    rgAvailable = false;
+  }
+  return rgAvailable;
+}
+
 export interface CodexIndexedSession {
   id: string;
   threadName: string;
@@ -71,20 +84,23 @@ export function findSessionFileById(id: string, codexHome = join(homedir(), '.co
   const sessionsDir = join(codexHome, 'sessions');
   if (!existsSync(sessionsDir)) return null;
 
-  try {
-    const result = execFileSync(
-      'rg',
-      ['-l', '--fixed-strings', `"${id}"`, sessionsDir],
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-    for (const file of result) {
-      if (fileMatchesSessionId(file, id)) return file;
+  // Only try ripgrep if it's available
+  if (isRipgrepAvailable()) {
+    try {
+      const result = execFileSync(
+        'rg',
+        ['-l', '--fixed-strings', `"${id}"`, sessionsDir],
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+      )
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+      for (const file of result) {
+        if (fileMatchesSessionId(file, id)) return file;
+      }
+    } catch {
+      // fall back to slower in-process scan
     }
-  } catch {
-    // fall back to slower in-process scan
   }
 
   const files = globSync(join(sessionsDir, '**/*.jsonl'));

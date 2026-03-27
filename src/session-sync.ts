@@ -3,8 +3,9 @@ import { ChannelType } from 'discord.js';
 import { listCodexSessionsForProjects } from './codex-session-discovery.ts';
 import { getAllRegisteredProjects } from './project-registry.ts';
 import * as sessions from './thread-manager.ts';
+import { config } from './config.ts';
 
-const SYNC_INTERVAL_MS = 30_000;
+const SYNC_INTERVAL_MS = config.sessionSyncIntervalMs;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 let syncInProgress = false;
 

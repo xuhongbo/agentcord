@@ -14,6 +14,7 @@ export const VALID_KEYS = new Set([
   'ALLOW_ALL_USERS',
   'DEFAULT_PROVIDER',
   'DEFAULT_MODE',
+  'CLAUDE_PERMISSION_MODE',
   'MAX_SUBAGENT_DEPTH',
   'MAX_ACTIVE_SESSIONS',
   'AUTO_ARCHIVE_DAYS',
@@ -31,6 +32,7 @@ export const VALID_KEYS = new Set([
   'RATE_LIMIT_MS',
   'SHELL_ENABLED',
   'SHELL_ALLOWED_USERS',
+  'SESSION_SYNC_INTERVAL_MS',
 ]);
 
 const CODEX_SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
@@ -79,10 +81,11 @@ export function validateConfigValue(key: string, value: string): string | null {
         return `Invalid value for SHELL_ENABLED. Expected "true" or "false"`;
       }
       break;
-    case 'RATE_LIMIT_MS': {
+    case 'RATE_LIMIT_MS':
+    case 'SESSION_SYNC_INTERVAL_MS': {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 0) {
-        return `Invalid value for RATE_LIMIT_MS. Expected a non-negative integer`;
+        return `Invalid value for ${key}. Expected a non-negative integer`;
       }
       break;
     }
@@ -116,6 +119,11 @@ export function validateConfigValue(key: string, value: string): string | null {
     case 'DEFAULT_MODE':
       if (!['auto', 'plan', 'normal', 'monitor'].includes(value)) {
         return `Invalid value for DEFAULT_MODE. Expected one of: auto, plan, normal, monitor`;
+      }
+      break;
+    case 'CLAUDE_PERMISSION_MODE':
+      if (!['bypass', 'normal'].includes(value)) {
+        return `Invalid value for CLAUDE_PERMISSION_MODE. Expected one of: bypass, normal`;
       }
       break;
     case 'CODEX_WEB_SEARCH':

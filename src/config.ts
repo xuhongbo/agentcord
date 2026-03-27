@@ -48,6 +48,7 @@ export const config = {
 
   defaultProvider: optional('DEFAULT_PROVIDER', 'claude') as ProviderName,
   defaultMode: optional('DEFAULT_MODE', 'auto') as SessionMode,
+  claudePermissionMode: optional('CLAUDE_PERMISSION_MODE', 'normal') as 'bypass' | 'normal',
 
   maxSubagentDepth: optionalInt('MAX_SUBAGENT_DEPTH', 3),
   maxActiveSessionsPerProject: optionalInt('MAX_ACTIVE_SESSIONS', 20),
@@ -70,6 +71,8 @@ export const config = {
 
   anthropicApiKey: optional('ANTHROPIC_API_KEY', ''),
   anthropicBaseUrl: optional('ANTHROPIC_BASE_URL', ''),
+
+  sessionSyncIntervalMs: optionalInt('SESSION_SYNC_INTERVAL_MS', 30_000),
 } as const;
 
 if (config.anthropicApiKey) process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
