@@ -1,5 +1,5 @@
 import type { Client } from 'discord.js';
-import { getAllSessions } from './thread-manager.ts';
+import { getAllSessions, abortSessionWithReason } from './thread-manager.ts';
 import { getAllRegisteredProjects } from './project-registry.ts';
 import { config } from './config.ts';
 
@@ -204,15 +204,16 @@ function performHealthChecks(): HealthCheck {
   try {
     const sessions = getAllSessions();
 
-    // Check for stuck sessions
+    // Check for stuck sessions — auto-abort if over threshold
     for (const session of sessions) {
       if (session.isGenerating) {
         const stuckTime = now - session.lastActivity;
         if (stuckTime > config.healthCheckStuckThresholdMs) {
+          abortSessionWithReason(session.id, 'watchdog');
           issues.push({
             severity: 'error',
             category: 'session',
-            message: `Session ${session.id} stuck for ${formatDuration(stuckTime)}`,
+            message: `Session ${session.id} stuck for ${formatDuration(stuckTime)} — auto-aborted`,
             sessionId: session.id,
           });
         }

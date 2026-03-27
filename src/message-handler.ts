@@ -17,6 +17,14 @@ type SessionChannel = TextChannel | AnyThreadChannel;
 // Per-user rate limiting: userId:channelId → timestamp
 const lastMessageTime = new Map<string, number>();
 
+// Evict stale entries every 10 minutes (entries older than 1 minute are irrelevant)
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [key, ts] of lastMessageTime) {
+    if (ts < cutoff) lastMessageTime.delete(key);
+  }
+}, 10 * 60 * 1000);
+
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 const TEXT_EXTS = new Set(['.txt', '.md', '.log', '.json', '.ts', '.js', '.py', '.sh', '.yaml', '.yml', '.toml', '.env', '.csv']);
 const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024; // 5MB
