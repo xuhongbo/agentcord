@@ -285,6 +285,34 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // Discord connection error handlers (must be registered before login)
+  client.on('error', err => {
+    botLog(`Discord client error: ${err.message}`);
+    console.error('Discord client error:', err);
+  });
+
+  client.on('warn', msg => {
+    console.warn('Discord warn:', msg);
+  });
+
+  client.on('shardError', (err, shardId) => {
+    botLog(`WebSocket error on shard ${shardId}: ${err.message}`);
+    console.error(`Shard ${shardId} error:`, err);
+  });
+
+  client.on('shardDisconnect', (event, shardId) => {
+    botLog(`Shard ${shardId} disconnected (code ${event.code}). discord.js will attempt reconnect.`);
+    console.warn(`Shard ${shardId} disconnected:`, event);
+  });
+
+  client.on('shardReconnecting', shardId => {
+    console.log(`Shard ${shardId} reconnecting...`);
+  });
+
+  client.on('shardResume', (shardId, replayedEvents) => {
+    botLog(`Shard ${shardId} resumed (${replayedEvents} events replayed).`);
+  });
+
   // Graceful shutdown
   const shutdown = () => {
     botLog('Shutting down...');
@@ -298,6 +326,20 @@ export async function startBot(): Promise<void> {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  process.on('uncaughtException', err => {
+    console.error('Uncaught exception:', err);
+    botLog(`Uncaught exception: ${err.message} — restarting`);
+    flushLogs();
+    releaseLock();
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    console.error('Unhandled rejection:', reason);
+    botLog(`Unhandled rejection: ${msg}`);
+  });
 
   await client.login(config.token);
 }
