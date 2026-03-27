@@ -133,6 +133,13 @@ export async function handleMessage(message: Message): Promise<void> {
 
   if (blocks.length === 0) return;
 
+  // Immediate feedback: react to user message to show bot is alive
+  try {
+    await message.react('👀');
+  } catch {
+    // Ignore reaction errors (missing permissions, etc.)
+  }
+
   await executeSessionPrompt(session, channel as SessionChannel, blocks.length === 1 && blocks[0].type === 'text'
     ? (blocks[0] as { type: 'text'; text: string }).text
     : blocks);

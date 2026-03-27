@@ -22,6 +22,7 @@ import {
   renderCodexTodoListEmbed,
 } from './codex-renderer.ts';
 import { getSession } from './thread-manager.ts';
+import * as sessions from './thread-manager.ts';
 
 // In-memory store for expandable content (with TTL cleanup)
 const expandableStore = new Map<string, ExpandableContent>();
@@ -97,12 +98,12 @@ function makeOptionButtons(sessionId: string, options: string[]): ActionRowBuild
   return rows;
 }
 
-export function makeModeButtons(sessionId: string, currentMode: string): ActionRowBuilder<ButtonBuilder> {
+export function makeModeButtons(sessionId: string, currentMode: string, claudePermissionMode?: 'bypass' | 'normal'): ActionRowBuilder<ButtonBuilder> {
   const modes = [
-    { id: 'auto', label: '⚡ Auto' },
-    { id: 'plan', label: '📋 Plan' },
-    { id: 'normal', label: '🛡️ Normal' },
-    { id: 'monitor', label: '🧠 Monitor' },
+    { id: 'auto', label: '⚡ 自动模式' },
+    { id: 'plan', label: '📋 计划模式' },
+    { id: 'normal', label: '🛡️ 普通模式' },
+    { id: 'monitor', label: '🧠 监控模式' },
   ];
 
   const row = new ActionRowBuilder<ButtonBuilder>();
@@ -115,6 +116,19 @@ export function makeModeButtons(sessionId: string, currentMode: string): ActionR
         .setDisabled(m.id === currentMode),
     );
   }
+
+  // Add Claude permission mode indicator if applicable
+  if (claudePermissionMode) {
+    const permLabel = claudePermissionMode === 'bypass' ? '⚡ 绕过权限' : '🛡️ 需要确认';
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`perm-info:${sessionId}`)
+        .setLabel(permLabel)
+        .setStyle(claudePermissionMode === 'bypass' ? ButtonStyle.Danger : ButtonStyle.Success)
+        .setDisabled(true),
+    );
+  }
+
   return row;
 }
 
@@ -266,6 +280,45 @@ function renderAskUserQuestion(
 }
 
 /**
+ * Detect repetitive patterns in text (e.g., "我来帮你查看最近的对话历史。" repeated 10+ times)
+ */
+function detectRepetition(text: string): { isRepetitive: boolean; cleanedText: string } {
+  // Split by sentence-ending punctuation
+  const sentences = text.split(/[。！？\n]+/).filter(s => s.trim().length > 5);
+  if (sentences.length < 3) return { isRepetitive: false, cleanedText: text };
+
+  // Count sentence frequencies
+  const counts = new Map<string, number>();
+  for (const sentence of sentences) {
+    const normalized = sentence.trim();
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+
+  // Find most repeated sentence
+  let maxCount = 0;
+  let mostRepeated = '';
+  for (const [sentence, count] of counts) {
+    if (count > maxCount) {
+      maxCount = count;
+      mostRepeated = sentence;
+    }
+  }
+
+  // If a sentence repeats 5+ times, it's likely a repetition bug
+  if (maxCount >= 5) {
+    // Keep only first 2 occurrences + add warning
+    const parts = text.split(mostRepeated);
+    const cleaned = parts.slice(0, 3).join(mostRepeated) + mostRepeated;
+    return {
+      isRepetitive: true,
+      cleanedText: cleaned + `\n\n⚠️ *[检测到重复输出,已截断 ${maxCount - 2} 次重复]*`,
+    };
+  }
+
+  return { isRepetitive: false, cleanedText: text };
+}
+
+/**
  * Serialized message editor — ensures only one Discord API call is in-flight
  * at a time, preventing duplicate messages from race conditions.
  */
@@ -350,7 +403,9 @@ class MessageStreamer {
 
     if (this.dirty) {
       this.dirty = false;
-      const text = this.currentText;
+      // Apply repetition detection before finalizing
+      const { cleanedText } = detectRepetition(this.currentText);
+      const text = cleanedText;
       const chunks = splitMessage(text);
       const lastChunk = chunks[chunks.length - 1];
 
@@ -655,7 +710,8 @@ export async function handleOutputStream(
           } else if (detectYesNoPrompt(checkText)) {
             components.push(makeYesNoButtons(sessionId));
           }
-          components.push(makeModeButtons(sessionId, mode));
+          const session = sessions.getSession(sessionId);
+          components.push(makeModeButtons(sessionId, mode, session?.claudePermissionMode));
           await channel.send({ components });
           break;
         }

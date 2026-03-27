@@ -13,7 +13,7 @@ import type {
 import type { ProviderEvent, ContentBlock } from './providers/types.ts';
 
 const MAX_MONITOR_ITERATIONS = 6;
-const WORKER_IDLE_TIMEOUT_MS = 45_000;
+const WORKER_IDLE_TIMEOUT_MS = 180_000; // 3 minutes - increased from 45s to handle slow API calls and large codebases
 
 interface MonitorDecision extends SessionMonitorFeedbackReport {
   status: 'complete' | 'continue' | 'blocked';
@@ -532,8 +532,10 @@ async function runWorkerPass(
     }
 
     const resultReport = buildWorkerProgressReport('', result);
+    // Only set monitor_review status if this is a monitor mode session
+    // For non-monitor sessions, set to idle to allow immediate response
     applyWorkflowHook(session, 'after_worker_pass', {
-      status: 'monitor_review',
+      status: session.mode === 'monitor' ? 'monitor_review' : 'idle',
       lastWorkerSummary: summarizeWorkerPass(resultReport),
       lastWorkerReport: resultReport,
     });

@@ -447,7 +447,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
 
   await sessionChannel.send({
     embeds: [welcomeEmbed],
-    components: [makeModeButtons(session.id, mode)],
+    components: [makeModeButtons(session.id, mode, session.claudePermissionMode)],
   });
 
   // Reply to original command

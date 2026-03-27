@@ -243,10 +243,11 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     });
     try {
       const original = interaction.message;
+      const session = sessions.getSession(sessionId);
       const updatedComponents = original.components.map((row: any) => {
         const first = row.components?.[0];
         if (first?.customId?.startsWith('mode:')) {
-          return makeModeButtons(sessionId, newMode);
+          return makeModeButtons(sessionId, newMode, session?.claudePermissionMode);
         }
         return row;
       });
