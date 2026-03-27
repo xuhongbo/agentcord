@@ -1,7 +1,17 @@
 import type { Provider, ProviderName } from './types.ts';
 import { ClaudeProvider } from './claude-provider.ts';
 
-export type { Provider, ProviderName, ProviderEvent, ProviderSessionOptions, ContentBlock, ImageMediaType, TextBlock, ImageBlock, LocalImageBlock } from './types.ts';
+export type {
+  Provider,
+  ProviderName,
+  ProviderEvent,
+  ProviderSessionOptions,
+  ContentBlock,
+  ImageMediaType,
+  TextBlock,
+  ImageBlock,
+  LocalImageBlock,
+} from './types.ts';
 
 const providers = new Map<ProviderName, Provider>();
 
@@ -17,7 +27,7 @@ async function loadCodexProvider(): Promise<void> {
   } catch (err: unknown) {
     codexLoadAttempted = true;
     throw new Error(
-      `Codex provider is unavailable. Install @openai/codex-sdk manually (npm i -g @openai/codex-sdk or add it to this project). Root cause: ${(err as Error).message}`,
+      `Codex provider is unavailable. Install @openai/codex-sdk manually. Root cause: ${(err as Error).message}`,
     );
   }
 }
@@ -37,7 +47,7 @@ export async function ensureProvider(name: ProviderName): Promise<Provider> {
   }
 
   if (name === 'codex') {
-    throw new Error('Codex provider is unavailable. Install @openai/codex-sdk and restart agentcord.');
+    throw new Error('Codex provider is unavailable. Install @openai/codex-sdk and restart threadcord.');
   }
 
   throw new Error(`Unknown provider: ${name}`);

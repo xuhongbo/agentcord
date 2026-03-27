@@ -1,105 +1,81 @@
-import type { Config } from './types.ts';
-import type { CodexApprovalPolicy, CodexSandboxMode } from './providers/types.ts';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type { ProviderName, SessionMode } from './types.ts';
 import { getConfigValue } from './global-config.ts';
 
-function getRequired(key: string): string {
+function required(key: string): string {
   const value = getConfigValue(key);
   if (!value) {
     console.error(`ERROR: ${key} is not configured.`);
-    console.error('Run \x1b[36magentcord config setup\x1b[0m to configure.');
+    console.error('Run \x1b[36mthreadcord config setup\x1b[0m to configure.');
     process.exit(1);
   }
   return value;
 }
 
-const CODEX_SANDBOX_MODES = new Set<CodexSandboxMode>([
-  'read-only',
-  'workspace-write',
-  'danger-full-access',
-]);
-const CODEX_APPROVAL_POLICIES = new Set<CodexApprovalPolicy>([
-  'never',
-  'on-request',
-  'on-failure',
-  'untrusted',
-]);
-
-function parseCodexSandboxMode(value: string | undefined): CodexSandboxMode | undefined {
-  if (!value) return undefined;
-  if (CODEX_SANDBOX_MODES.has(value as CodexSandboxMode)) {
-    return value as CodexSandboxMode;
-  }
-  console.error(
-    `ERROR: Invalid CODEX_SANDBOX_MODE "${value}". Expected one of: ${Array.from(CODEX_SANDBOX_MODES).join(', ')}`,
-  );
-  process.exit(1);
+function optional(key: string, fallback: string): string {
+  return getConfigValue(key) ?? fallback;
 }
 
-function parseCodexApprovalPolicy(value: string | undefined): CodexApprovalPolicy | undefined {
-  if (!value) return undefined;
-  if (CODEX_APPROVAL_POLICIES.has(value as CodexApprovalPolicy)) {
-    return value as CodexApprovalPolicy;
-  }
-  console.error(
-    `ERROR: Invalid CODEX_APPROVAL_POLICY "${value}". Expected one of: ${Array.from(CODEX_APPROVAL_POLICIES).join(', ')}`,
-  );
-  process.exit(1);
+function optionalList(key: string, fallback: string[] = []): string[] {
+  const value = getConfigValue(key);
+  if (!value) return fallback;
+  return value.split(',').map(item => item.trim()).filter(Boolean);
 }
 
-function parseBoolean(name: string, value: string | undefined): boolean | undefined {
-  if (value === undefined) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  console.error(`ERROR: Invalid ${name} "${value}". Expected "true" or "false".`);
-  process.exit(1);
+function optionalInt(key: string, fallback: number): number {
+  const value = getConfigValue(key);
+  if (!value) return fallback;
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) ? fallback : n;
 }
 
-export const config: Config = {
-  token: getRequired('DISCORD_TOKEN'),
-  clientId: getRequired('DISCORD_CLIENT_ID'),
-  guildId: getConfigValue('DISCORD_GUILD_ID') ?? null,
-  allowedUsers: getConfigValue('ALLOWED_USERS')?.split(',').map(id => id.trim()).filter(Boolean) ?? [],
-  allowAllUsers: getConfigValue('ALLOW_ALL_USERS') === 'true',
-  shellEnabled: getConfigValue('SHELL_ENABLED') === 'true',
-  shellAllowedUsers: getConfigValue('SHELL_ALLOWED_USERS')?.split(',').map(id => id.trim()).filter(Boolean) ?? [],
-  messageRetentionDays: getConfigValue('MESSAGE_RETENTION_DAYS')
-    ? parseInt(getConfigValue('MESSAGE_RETENTION_DAYS')!, 10)
-    : null,
-  rateLimitMs: getConfigValue('RATE_LIMIT_MS')
-    ? parseInt(getConfigValue('RATE_LIMIT_MS')!, 10)
-    : 1000,
-  codexSandboxMode: parseCodexSandboxMode(getConfigValue('CODEX_SANDBOX_MODE')),
-  codexApprovalPolicy: parseCodexApprovalPolicy(getConfigValue('CODEX_APPROVAL_POLICY')),
-  codexNetworkAccessEnabled: parseBoolean('CODEX_NETWORK_ACCESS_ENABLED', getConfigValue('CODEX_NETWORK_ACCESS_ENABLED')),
-};
+function optionalBool(key: string, fallback: boolean): boolean {
+  const value = getConfigValue(key);
+  if (!value) return fallback;
+  return value === 'true' || value === '1';
+}
 
-if (config.allowedUsers.length > 0) {
-  console.log(`User whitelist: ${config.allowedUsers.length} user(s) allowed`);
-} else if (config.allowAllUsers) {
-  console.warn('WARNING: ALLOW_ALL_USERS=true — anyone in the guild can use this bot');
-} else {
+export const config = {
+  token: required('DISCORD_TOKEN'),
+  clientId: required('DISCORD_CLIENT_ID'),
+  guildId: optional('DISCORD_GUILD_ID', ''),
+
+  allowedUsers: optionalList('ALLOWED_USERS'),
+  allowAllUsers: optionalBool('ALLOW_ALL_USERS', false),
+
+  dataDir: join(homedir(), '.threadcord'),
+
+  defaultProvider: optional('DEFAULT_PROVIDER', 'claude') as ProviderName,
+  defaultMode: optional('DEFAULT_MODE', 'auto') as SessionMode,
+
+  maxSubagentDepth: optionalInt('MAX_SUBAGENT_DEPTH', 3),
+  maxActiveSessionsPerProject: optionalInt('MAX_ACTIVE_SESSIONS', 20),
+  autoArchiveDays: optionalInt('AUTO_ARCHIVE_DAYS', 7),
+
+  messageRetentionDays: optionalInt('MESSAGE_RETENTION_DAYS', 0),
+  rateLimitMs: optionalInt('RATE_LIMIT_MS', 1000),
+
+  shellEnabled: optionalBool('SHELL_ENABLED', false),
+  shellAllowedUsers: optionalList('SHELL_ALLOWED_USERS'),
+
+  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as 'read-only' | 'workspace-write' | 'danger-full-access',
+  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as 'never' | 'on-request' | 'on-failure' | 'untrusted',
+  codexNetworkAccessEnabled: optionalBool('CODEX_NETWORK_ACCESS_ENABLED', false),
+  codexWebSearchMode: optional('CODEX_WEB_SEARCH', 'disabled') as 'disabled' | 'cached' | 'live',
+  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '',
+  codexBaseUrl: optional('CODEX_BASE_URL', ''),
+  codexApiKey: optional('CODEX_API_KEY', ''),
+  codexPath: optional('CODEX_PATH', ''),
+
+  anthropicApiKey: optional('ANTHROPIC_API_KEY', ''),
+  anthropicBaseUrl: optional('ANTHROPIC_BASE_URL', ''),
+} as const;
+
+if (config.anthropicApiKey) process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+if (config.anthropicBaseUrl) process.env.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
+
+if (config.allowedUsers.length === 0 && !config.allowAllUsers) {
   console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
   process.exit(1);
-}
-
-if (config.messageRetentionDays) {
-  console.log(`Message retention: ${config.messageRetentionDays} day(s)`);
-}
-
-
-if (config.shellEnabled) {
-  if (config.shellAllowedUsers.length > 0) {
-    console.log(`Shell access: enabled for ${config.shellAllowedUsers.length} user(s)`);
-  } else {
-    console.warn('WARNING: SHELL_ENABLED=true but SHELL_ALLOWED_USERS is empty; falling back to normal user authorization rules.');
-  }
-}
-
-if (config.codexSandboxMode || config.codexApprovalPolicy || config.codexNetworkAccessEnabled !== undefined) {
-  const bits: string[] = [];
-  if (config.codexSandboxMode) bits.push(`sandbox=${config.codexSandboxMode}`);
-  if (config.codexApprovalPolicy) bits.push(`approval=${config.codexApprovalPolicy}`);
-  if (config.codexNetworkAccessEnabled !== undefined) bits.push(`network=${config.codexNetworkAccessEnabled}`);
-  console.log(`Codex defaults: ${bits.join(', ')}`);
 }

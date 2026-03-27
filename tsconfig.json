@@ -13,5 +13,13 @@
     "verbatimModuleSyntax": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "test"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "src/agent-manager.ts",
+    "src/agent-router.ts",
+    "src/session-manager.ts",
+    "src/team-orchestrator.ts"
+  ]
 }

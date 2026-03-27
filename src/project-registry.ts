@@ -8,7 +8,8 @@ export interface RegisteredProject {
   name: string;
   path: string;
   discordCategoryId?: string;
-  discordLogChannelId?: string;
+  discordCategoryName?: string;
+  historyChannelId?: string;
   personality?: string;
   skills: Record<string, string>;
   mcpServers: McpServer[];
@@ -32,16 +33,16 @@ export async function loadRegistry(): Promise<void> {
 }
 
 export function getProjectByName(name: string): RegisteredProject | undefined {
-  return projects.find(p => p.name === name);
+  return projects.find(project => project.name === name);
 }
 
 export function getProjectByPath(path: string): RegisteredProject | undefined {
   const normalized = normalizePath(path);
-  return projects.find(p => normalizePath(p.path) === normalized);
+  return projects.find(project => normalizePath(project.path) === normalized);
 }
 
 export function getProjectByCategoryId(categoryId: string): RegisteredProject | undefined {
-  return projects.find(p => p.discordCategoryId === categoryId);
+  return projects.find(project => project.discordCategoryId === categoryId);
 }
 
 export function getAllRegisteredProjects(): RegisteredProject[] {
@@ -91,23 +92,51 @@ export async function renameProject(oldName: string, newName: string): Promise<v
 
 export async function removeProject(name: string): Promise<void> {
   const before = projects.length;
-  projects = projects.filter(p => p.name !== name);
+  projects = projects.filter(project => project.name !== name);
   if (projects.length === before) throw new Error(`Project not found: ${name}`);
   await saveRegistry();
 }
 
-export async function updateProjectDiscord(name: string, categoryId: string, logChannelId?: string): Promise<void> {
+export async function bindProjectCategory(
+  name: string,
+  categoryId: string,
+  categoryName?: string,
+): Promise<void> {
   const project = getProjectByName(name);
   if (!project) throw new Error(`Project not found: ${name}`);
+
+  const existing = getProjectByCategoryId(categoryId);
+  if (existing && existing.name !== name) {
+    throw new Error(`Discord category is already bound to project "${existing.name}"`);
+  }
+
   project.discordCategoryId = categoryId;
-  if (logChannelId) project.discordLogChannelId = logChannelId;
+  project.discordCategoryName = categoryName;
+  project.updatedAt = Date.now();
+  await saveRegistry();
+}
+
+export async function unbindProjectCategory(name: string): Promise<void> {
+  const project = getProjectByName(name);
+  if (!project) throw new Error(`Project not found: ${name}`);
+  delete project.discordCategoryId;
+  delete project.discordCategoryName;
+  delete project.historyChannelId;
+  project.updatedAt = Date.now();
+  await saveRegistry();
+}
+
+export async function setProjectHistoryChannel(name: string, historyChannelId: string): Promise<void> {
+  const project = getProjectByName(name);
+  if (!project) throw new Error(`Project not found: ${name}`);
+  project.historyChannelId = historyChannelId;
   project.updatedAt = Date.now();
   await saveRegistry();
 }
 
 export async function updateProject(project: RegisteredProject): Promise<void> {
-  const idx = projects.findIndex(p => p.name === project.name);
-  if (idx < 0) throw new Error(`Project not found: ${project.name}`);
-  projects[idx] = { ...project, updatedAt: Date.now() };
+  const index = projects.findIndex(item => item.name === project.name);
+  if (index < 0) throw new Error(`Project not found: ${project.name}`);
+  projects[index] = { ...project, updatedAt: Date.now() };
   await saveRegistry();
 }

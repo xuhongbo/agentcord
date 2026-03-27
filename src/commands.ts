@@ -1,355 +1,197 @@
-import {
-  SlashCommandBuilder,
-  REST,
-  Routes,
-  type RESTPostAPIChatInputApplicationCommandsJSONBody,
-} from 'discord.js';
+import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { config } from './config.ts';
 
-export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommandsJSONBody[] {
-  const session = new SlashCommandBuilder()
-    .setName('session')
-    .setDescription('Manage AI coding sessions')
-    .addSubcommand(sub =>
-      sub.setName('new')
-        .setDescription('Create a new coding session')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Session name').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('provider').setDescription('AI provider')
-            .addChoices(
-              { name: 'Claude Code', value: 'claude' },
-              { name: 'OpenAI Codex', value: 'codex' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('sandbox-mode').setDescription('Codex sandbox mode (Codex provider only)')
-            .addChoices(
-              { name: 'Read-only', value: 'read-only' },
-              { name: 'Workspace write', value: 'workspace-write' },
-              { name: 'Danger full access', value: 'danger-full-access' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('approval-policy').setDescription('Codex approval policy (Codex provider only)')
-            .addChoices(
-              { name: 'Never ask', value: 'never' },
-              { name: 'On request', value: 'on-request' },
-              { name: 'On failure', value: 'on-failure' },
-              { name: 'Untrusted', value: 'untrusted' },
-            ))
-        .addBooleanOption(opt =>
-          opt.setName('network-access').setDescription('Allow network in workspace-write sandbox (Codex only)'))
-        .addStringOption(opt =>
-          opt.setName('mode').setDescription('Initial session mode')
-            .addChoices(
-              { name: 'Auto — full autonomy', value: 'auto' },
-              { name: 'Plan — plan before executing', value: 'plan' },
-              { name: 'Normal — ask before destructive ops', value: 'normal' },
-              { name: 'Monitor — keep steering until complete', value: 'monitor' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('project').setDescription('Mounted project name').setRequired(true).setAutocomplete(true)))
-    .addSubcommand(sub =>
-      sub.setName('resume')
-        .setDescription('Resume an existing session from terminal')
-        .addStringOption(opt =>
-          opt.setName('session-id').setDescription('Provider session ID').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Name for the Discord channel').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('provider').setDescription('AI provider')
-            .addChoices(
-              { name: 'Claude Code', value: 'claude' },
-              { name: 'OpenAI Codex', value: 'codex' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('sandbox-mode').setDescription('Codex sandbox mode (Codex provider only)')
-            .addChoices(
-              { name: 'Read-only', value: 'read-only' },
-              { name: 'Workspace write', value: 'workspace-write' },
-              { name: 'Danger full access', value: 'danger-full-access' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('approval-policy').setDescription('Codex approval policy (Codex provider only)')
-            .addChoices(
-              { name: 'Never ask', value: 'never' },
-              { name: 'On request', value: 'on-request' },
-              { name: 'On failure', value: 'on-failure' },
-              { name: 'Untrusted', value: 'untrusted' },
-            ))
-        .addBooleanOption(opt =>
-          opt.setName('network-access').setDescription('Allow network in workspace-write sandbox (Codex only)'))
-        .addStringOption(opt =>
-          opt.setName('mode').setDescription('Initial session mode')
-            .addChoices(
-              { name: 'Auto — full autonomy', value: 'auto' },
-              { name: 'Plan — plan before executing', value: 'plan' },
-              { name: 'Normal — ask before destructive ops', value: 'normal' },
-              { name: 'Monitor — keep steering until complete', value: 'monitor' },
-            ))
-        .addStringOption(opt =>
-          opt.setName('project').setDescription('Mounted project name').setRequired(true).setAutocomplete(true)))
-    .addSubcommand(sub =>
-      sub.setName('list').setDescription('List active sessions'))
-    .addSubcommand(sub =>
-      sub.setName('end').setDescription('End the session in this channel'))
-    .addSubcommand(sub =>
-      sub.setName('continue').setDescription('Continue the last conversation'))
-    .addSubcommand(sub =>
-      sub.setName('stop').setDescription('Stop current generation'))
-    .addSubcommand(sub =>
-      sub.setName('output')
-        .setDescription('Show recent conversation output')
-        .addIntegerOption(opt =>
-          opt.setName('lines').setDescription('Number of lines (default 50)').setMinValue(1).setMaxValue(500)))
-    .addSubcommand(sub =>
-      sub.setName('attach').setDescription('Show command to resume session in terminal'))
-    .addSubcommand(sub =>
-      sub.setName('sync').setDescription('Reconnect orphaned provider channels'))
-    .addSubcommand(sub =>
-      sub.setName('model')
-        .setDescription('Change the model for this session')
-        .addStringOption(opt =>
-          opt.setName('model').setDescription('Model name (e.g. claude-sonnet-4-5-20250929, gpt-5.3-codex)').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('id').setDescription('Show the provider session ID for this channel'))
-    .addSubcommand(sub =>
-      sub.setName('verbose').setDescription('Toggle showing tool calls and results in this session'))
-    .addSubcommand(sub =>
-      sub.setName('mode')
-        .setDescription('Set session mode (auto/plan/normal/monitor)')
-        .addStringOption(opt =>
-          opt.setName('mode').setDescription('Session mode').setRequired(true)
-            .addChoices(
-              { name: 'Auto \u2014 full autonomy', value: 'auto' },
-              { name: 'Plan \u2014 plan before executing', value: 'plan' },
-              { name: 'Normal \u2014 ask before destructive ops', value: 'normal' },
-              { name: 'Monitor \u2014 keep steering until complete', value: 'monitor' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('goal')
-        .setDescription('Show or update the monitor goal for this session')
-        .addStringOption(opt =>
-          opt.setName('goal').setDescription('New monitor goal to save for this session'))
-        .addBooleanOption(opt =>
-          opt.setName('clear').setDescription('Clear the saved monitor goal')));
-
-  const shell = new SlashCommandBuilder()
-    .setName('shell')
-    .setDescription('Run shell commands in the session directory')
-    .addSubcommand(sub =>
-      sub.setName('run')
-        .setDescription('Execute a shell command')
-        .addStringOption(opt =>
-          opt.setName('command').setDescription('Command to run').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('processes').setDescription('List running processes'))
-    .addSubcommand(sub =>
-      sub.setName('kill')
-        .setDescription('Kill a running process')
-        .addIntegerOption(opt =>
-          opt.setName('pid').setDescription('Process ID to kill').setRequired(true)));
-
-  const agent = new SlashCommandBuilder()
-    .setName('agent')
-    .setDescription('Manage agent personas')
-    .addSubcommand(sub =>
-      sub.setName('use')
-        .setDescription('Switch to an agent persona')
-        .addStringOption(opt =>
-          opt.setName('persona')
-            .setDescription('Agent persona name')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Code Reviewer', value: 'code-reviewer' },
-              { name: 'Architect', value: 'architect' },
-              { name: 'Debugger', value: 'debugger' },
-              { name: 'Security Analyst', value: 'security' },
-              { name: 'Performance Engineer', value: 'performance' },
-              { name: 'DevOps Engineer', value: 'devops' },
-              { name: 'General', value: 'general' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('list').setDescription('List available agent personas'))
-    .addSubcommand(sub =>
-      sub.setName('clear').setDescription('Clear agent persona'));
-
-  const project = new SlashCommandBuilder()
+const commands = [
+  // ── /project ──────────────────────────────────────────────────────
+  new SlashCommandBuilder()
     .setName('project')
-    .setDescription('Configure project settings')
-    .addSubcommand(sub =>
-      sub.setName('personality')
-        .setDescription('Set a custom personality for this project')
-        .addStringOption(opt =>
-          opt.setName('prompt').setDescription('System prompt for the project').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('personality-show').setDescription('Show the current project personality'))
-    .addSubcommand(sub =>
-      sub.setName('personality-clear').setDescription('Clear the project personality'))
-    .addSubcommand(sub =>
-      sub.setName('skill-add')
-        .setDescription('Add a skill (prompt template) to this project')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Skill name').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('prompt').setDescription('Prompt template (use {input} for placeholder)').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('skill-remove')
-        .setDescription('Remove a skill')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Skill name').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('skill-list').setDescription('List all skills for this project'))
-    .addSubcommand(sub =>
-      sub.setName('skill-run')
-        .setDescription('Execute a skill')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Skill name').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('input').setDescription('Input to pass to the skill template')))
-    .addSubcommand(sub =>
-      sub.setName('mcp-add')
-        .setDescription('Add an MCP server to this project')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Server name').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('command').setDescription('Command to run (e.g. npx my-mcp-server)').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('args').setDescription('Arguments (comma-separated)')))
-    .addSubcommand(sub =>
-      sub.setName('mcp-remove')
-        .setDescription('Remove an MCP server')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Server name').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('mcp-list').setDescription('List configured MCP servers'))
-    .addSubcommand(sub =>
-      sub.setName('info').setDescription('Show project configuration'))
-    .addSubcommand(sub =>
-      sub.setName('list').setDescription('List mounted projects and Discord category status'));
+    .setDescription('管理项目与分类绑定')
+    .addSubcommand(sub => sub
+      .setName('setup')
+      .setDescription('把当前分类绑定到已挂载的本地项目，并创建历史归档区')
+      .addStringOption(opt => opt
+        .setName('project')
+        .setDescription('已通过 threadcord project init 挂载的项目名')
+        .setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('info')
+      .setDescription('查看当前分类对应的项目信息'))
+    .addSubcommand(sub => sub
+      .setName('personality')
+      .setDescription('设置该项目下所有代理共享的人格提示词')
+      .addStringOption(opt => opt
+        .setName('prompt')
+        .setDescription('应用到所有代理的系统提示词')
+        .setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('personality-clear')
+      .setDescription('清除项目共享人格'))
+    .addSubcommand(sub => sub
+      .setName('skill-add')
+      .setDescription('添加可复用技能提示词')
+      .addStringOption(opt => opt.setName('name').setDescription('技能名称').setRequired(true))
+      .addStringOption(opt => opt.setName('prompt').setDescription('技能提示词，可使用 {input} 占位').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('skill-remove')
+      .setDescription('移除一个技能')
+      .addStringOption(opt => opt.setName('name').setDescription('技能名称').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('skill-list')
+      .setDescription('列出当前项目的全部技能'))
+    .addSubcommand(sub => sub
+      .setName('skill-run')
+      .setDescription('执行一个技能提示词')
+      .addStringOption(opt => opt.setName('name').setDescription('技能名称').setRequired(true))
+      .addStringOption(opt => opt.setName('input').setDescription('替换到 {input} 的输入内容').setRequired(false)))
+    .addSubcommand(sub => sub
+      .setName('mcp-add')
+      .setDescription('为当前项目注册一个 MCP 服务')
+      .addStringOption(opt => opt.setName('name').setDescription('服务名称').setRequired(true))
+      .addStringOption(opt => opt.setName('command').setDescription('启动 MCP 服务的命令').setRequired(true))
+      .addStringOption(opt => opt.setName('args').setDescription('逗号分隔的参数列表').setRequired(false)))
+    .addSubcommand(sub => sub
+      .setName('mcp-remove')
+      .setDescription('移除当前项目的 MCP 服务')
+      .addStringOption(opt => opt.setName('name').setDescription('服务名称').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('mcp-list')
+      .setDescription('列出当前项目配置的 MCP 服务')),
 
-  const plugin = new SlashCommandBuilder()
-    .setName('plugin')
-    .setDescription('Manage Claude Code plugins')
-    .addSubcommand(sub =>
-      sub.setName('browse')
-        .setDescription('Browse available plugins from marketplaces')
-        .addStringOption(opt =>
-          opt.setName('search').setDescription('Filter by name or keyword')))
-    .addSubcommand(sub =>
-      sub.setName('install')
-        .setDescription('Install a plugin')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin name (e.g. feature-dev@claude-plugins-official)').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('scope').setDescription('Installation scope (default: user)')
-            .addChoices(
-              { name: 'User \u2014 available everywhere', value: 'user' },
-              { name: 'Project \u2014 this project only', value: 'project' },
-              { name: 'Local \u2014 this directory only', value: 'local' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('remove')
-        .setDescription('Uninstall a plugin')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin ID').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('scope').setDescription('Scope to uninstall from (default: user)')
-            .addChoices(
-              { name: 'User', value: 'user' },
-              { name: 'Project', value: 'project' },
-              { name: 'Local', value: 'local' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('list')
-        .setDescription('List installed plugins'))
-    .addSubcommand(sub =>
-      sub.setName('info')
-        .setDescription('Show detailed info for a plugin')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin name or ID').setRequired(true).setAutocomplete(true)))
-    .addSubcommand(sub =>
-      sub.setName('enable')
-        .setDescription('Enable a disabled plugin')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin ID').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('scope').setDescription('Scope (default: user)')
-            .addChoices(
-              { name: 'User', value: 'user' },
-              { name: 'Project', value: 'project' },
-              { name: 'Local', value: 'local' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('disable')
-        .setDescription('Disable a plugin')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin ID').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('scope').setDescription('Scope (default: user)')
-            .addChoices(
-              { name: 'User', value: 'user' },
-              { name: 'Project', value: 'project' },
-              { name: 'Local', value: 'local' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('update')
-        .setDescription('Update a plugin to latest version')
-        .addStringOption(opt =>
-          opt.setName('plugin').setDescription('Plugin ID').setRequired(true).setAutocomplete(true))
-        .addStringOption(opt =>
-          opt.setName('scope').setDescription('Scope (default: user)')
-            .addChoices(
-              { name: 'User', value: 'user' },
-              { name: 'Project', value: 'project' },
-              { name: 'Local', value: 'local' },
-            )))
-    .addSubcommand(sub =>
-      sub.setName('marketplace-add')
-        .setDescription('Add a plugin marketplace')
-        .addStringOption(opt =>
-          opt.setName('source').setDescription('GitHub repo (owner/repo) or git URL').setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('marketplace-remove')
-        .setDescription('Remove a marketplace')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Marketplace name').setRequired(true).setAutocomplete(true)))
-    .addSubcommand(sub =>
-      sub.setName('marketplace-list')
-        .setDescription('List registered marketplaces'))
-    .addSubcommand(sub =>
-      sub.setName('marketplace-update')
-        .setDescription('Update marketplace catalogs')
-        .addStringOption(opt =>
-          opt.setName('name').setDescription('Specific marketplace (or all if omitted)').setAutocomplete(true)));
+  // ── /agent ────────────────────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName('agent')
+    .setDescription('管理主代理会话')
+    .addSubcommand(sub => sub
+      .setName('spawn')
+      .setDescription('在当前项目分类下创建一个新的代理会话频道')
+      .addStringOption(opt => opt.setName('label').setDescription('会话名称，例如 fix-login-bug').setRequired(true))
+      .addStringOption(opt => opt
+        .setName('provider')
+        .setDescription('选择代理提供方')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Claude（默认）', value: 'claude' },
+          { name: 'Codex', value: 'codex' },
+        ))
+      .addStringOption(opt => opt
+        .setName('mode')
+        .setDescription('执行模式')
+        .setRequired(false)
+        .addChoices(
+          { name: '⚡ 自动：全自主执行', value: 'auto' },
+          { name: '📋 计划：先规划再修改', value: 'plan' },
+          { name: '🛡️ 普通：危险操作前询问', value: 'normal' },
+          { name: '🧠 监督：持续推进直到完成', value: 'monitor' },
+        ))
+      .addStringOption(opt => opt.setName('directory').setDescription('覆盖默认工作目录').setRequired(false)))
+    .addSubcommand(sub => sub
+      .setName('list')
+      .setDescription('列出当前项目下的全部活跃主会话'))
+    .addSubcommand(sub => sub
+      .setName('archive')
+      .setDescription('把当前会话归档到 #history 并删除频道'))
+    .addSubcommand(sub => sub
+      .setName('stop')
+      .setDescription('停止当前会话中的生成'))
+    .addSubcommand(sub => sub
+      .setName('end')
+      .setDescription('结束当前会话'))
+    .addSubcommand(sub => sub
+      .setName('mode')
+      .setDescription('切换当前会话的执行模式')
+      .addStringOption(opt => opt
+        .setName('mode')
+        .setDescription('新的执行模式')
+        .setRequired(true)
+        .addChoices(
+          { name: '⚡ 自动', value: 'auto' },
+          { name: '📋 计划', value: 'plan' },
+          { name: '🛡️ 普通', value: 'normal' },
+          { name: '🧠 监督', value: 'monitor' },
+        )))
+    .addSubcommand(sub => sub
+      .setName('goal')
+      .setDescription('设置当前会话的监督目标')
+      .addStringOption(opt => opt.setName('goal').setDescription('目标描述').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('persona')
+      .setDescription('设置当前会话的代理人格')
+      .addStringOption(opt => opt
+        .setName('name')
+        .setDescription('人格名称')
+        .setRequired(false)
+        .addChoices(
+          { name: '🔍 代码审查', value: 'code-reviewer' },
+          { name: '🏗️ 架构设计', value: 'architect' },
+          { name: '🐛 调试专家', value: 'debugger' },
+          { name: '🔒 安全分析', value: 'security' },
+          { name: '🚀 性能优化', value: 'performance' },
+          { name: '⚙️ 运维工程', value: 'devops' },
+          { name: '🧠 通用（默认）', value: 'general' },
+        )))
+    .addSubcommand(sub => sub
+      .setName('verbose')
+      .setDescription('切换详细模式（显示工具调用）'))
+    .addSubcommand(sub => sub
+      .setName('model')
+      .setDescription('设置当前会话的模型覆盖')
+      .addStringOption(opt => opt.setName('model').setDescription('模型名称').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('continue')
+      .setDescription('继续当前会话的生成')),
 
-  return [
-    session.toJSON(),
-    shell.toJSON(),
-    agent.toJSON(),
-    project.toJSON(),
-    plugin.toJSON(),
-  ];
-}
+  // ── /subagent ─────────────────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName('subagent')
+    .setDescription('管理子代理线程')
+    .addSubcommand(sub => sub
+      .setName('run')
+      .setDescription('在当前主会话下创建一个子代理线程')
+      .addStringOption(opt => opt.setName('label').setDescription('子代理名称').setRequired(true))
+      .addStringOption(opt => opt
+        .setName('provider')
+        .setDescription('选择代理提供方')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Claude（默认）', value: 'claude' },
+          { name: 'Codex', value: 'codex' },
+        )))
+    .addSubcommand(sub => sub
+      .setName('list')
+      .setDescription('列出当前主会话下的子代理线程')),
+
+  // ── /shell ────────────────────────────────────────────────────────
+  new SlashCommandBuilder()
+    .setName('shell')
+    .setDescription('在项目目录中执行命令')
+    .addSubcommand(sub => sub
+      .setName('run')
+      .setDescription('执行一条命令')
+      .addStringOption(opt => opt.setName('command').setDescription('要执行的命令').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('processes')
+      .setDescription('列出正在运行的命令进程'))
+    .addSubcommand(sub => sub
+      .setName('kill')
+      .setDescription('结束一个运行中的进程')
+      .addIntegerOption(opt => opt.setName('pid').setDescription('进程编号').setRequired(true))),
+];
 
 export async function registerCommands(): Promise<void> {
-  const rest = new REST().setToken(config.token);
-  const commands = getCommandDefinitions();
+  const rest = new REST({ version: '10' }).setToken(config.token);
+  const body = commands.map(c => c.toJSON());
 
-  try {
-    if (config.guildId) {
-      await rest.put(
-        Routes.applicationGuildCommands(config.clientId, config.guildId),
-        { body: commands },
-      );
-      console.log(`Registered ${commands.length} guild commands`);
-    } else {
-      await rest.put(
-        Routes.applicationCommands(config.clientId),
-        { body: commands },
-      );
-      console.log(`Registered ${commands.length} global commands (may take ~1hr to propagate)`);
-    }
-  } catch (err) {
-    console.error('Failed to register commands:', err);
+  if (config.guildId) {
+    await rest.put(
+      Routes.applicationGuildCommands(config.clientId, config.guildId),
+      { body },
+    );
+    console.log(`[commands] Registered ${body.length} guild commands`);
+  } else {
+    await rest.put(
+      Routes.applicationCommands(config.clientId),
+      { body },
+    );
+    console.log(`[commands] Registered ${body.length} global commands`);
   }
 }

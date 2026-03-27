@@ -14,12 +14,12 @@ const archiveStore = new Store<ArchivedSession[]>('archived.json');
 
 let archived: ArchivedSession[] = [];
 
-export function loadArchived(): void {
-  archived = archiveStore.read() || [];
+export async function loadArchived(): Promise<void> {
+  archived = (await archiveStore.read()) || [];
 }
 
-function saveArchived(): void {
-  archiveStore.write(archived);
+async function saveArchived(): Promise<void> {
+  await archiveStore.write(archived);
 }
 
 export function getArchivedSessions(categoryId: string): ArchivedSession[] {
@@ -143,7 +143,7 @@ export async function archiveSession(
 
   // Persist the archive record
   archived.push(record);
-  saveArchived();
+  await saveArchived();
 
   return record;
 }

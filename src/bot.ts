@@ -4,17 +4,29 @@ import {
   ActivityType,
   InteractionType,
   ComponentType,
-  type TextChannel,
   ChannelType,
-  Collection,
+  type TextChannel,
 } from 'discord.js';
 import { config } from './config.ts';
 import { registerCommands } from './commands.ts';
-import { handleSession, handleSessionAutocomplete, handleProjectAutocomplete, handleShell, handleAgent, handleProject, handlePlugin, handlePluginAutocomplete, setLogger } from './command-handlers.ts';
+import {
+  handleProject,
+  handleAgent,
+  handleSubagent,
+  handleShell,
+  setLogger,
+} from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
 import { handleButton, handleSelectMenu } from './button-handler.ts';
-import { loadSessions, getAllSessions, unlinkChannel } from './session-manager.ts';
-import { loadRegistry, getAllRegisteredProjects, updateProjectDiscord } from './project-registry.ts';
+import {
+  loadSessions,
+  getAllSessions,
+  endSession,
+  getSessionByChannel,
+} from './thread-manager.ts';
+import { loadProjects } from './project-manager.ts';
+import { runSubagentWatchdog } from './subagent-manager.ts';
+import { loadArchived, checkAutoArchive } from './archive-manager.ts';
 import { startSync, stopSync } from './session-sync.ts';
 
 let client: Client;
@@ -36,7 +48,6 @@ function botLog(msg: string): void {
 async function flushLogs(): Promise<void> {
   logTimer = null;
   if (!logChannel || logBuffer.length === 0) return;
-
   const batch = logBuffer.splice(0, logBuffer.length).join('\n');
   try {
     await logChannel.send(batch);
@@ -46,30 +57,29 @@ async function flushLogs(): Promise<void> {
 }
 
 function updatePresence(): void {
-  const sessionCount = getAllSessions().length;
-  const generating = getAllSessions().filter(s => s.isGenerating).length;
+  const all = getAllSessions();
+  const generating = all.filter(s => s.isGenerating).length;
 
-  if (sessionCount === 0) {
+  if (all.length === 0) {
     client.user?.setPresence({
       status: 'idle',
-      activities: [{ name: 'No active sessions', type: ActivityType.Custom }],
+      activities: [{ name: 'No active agents', type: ActivityType.Custom }],
     });
   } else {
-    const status = generating > 0 ? `${generating} generating` : `${sessionCount} sessions`;
+    const label = generating > 0 ? `${generating} generating` : `${all.length} agents`;
     client.user?.setPresence({
       status: 'online',
-      activities: [{ name: `${status}`, type: ActivityType.Watching }],
+      activities: [{ name: label, type: ActivityType.Watching }],
     });
   }
 }
 
-// Message retention cleanup
 async function cleanupOldMessages(): Promise<void> {
   if (!config.messageRetentionDays) return;
-
   const cutoff = Date.now() - config.messageRetentionDays * 24 * 60 * 60 * 1000;
 
   for (const session of getAllSessions()) {
+    if (session.type !== 'persistent') continue;
     try {
       const channel = client.channels.cache.get(session.channelId) as TextChannel | undefined;
       if (!channel) continue;
@@ -79,9 +89,7 @@ async function cleanupOldMessages(): Promise<void> {
       if (old.size > 0) {
         await channel.bulkDelete(old, true);
       }
-    } catch {
-      // Channel may not exist
-    }
+    } catch { /* channel may not exist */ }
   }
 }
 
@@ -91,33 +99,21 @@ export async function startBot(): Promise<void> {
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMessageTyping,
     ],
   });
 
   setLogger(botLog);
 
-  // Slash commands
+  // Slash command / button interactions
   client.on('interactionCreate', async interaction => {
     try {
       if (interaction.type === InteractionType.ApplicationCommand && interaction.isChatInputCommand()) {
         switch (interaction.commandName) {
-          case 'session': return await handleSession(interaction);
-          case 'shell': return await handleShell(interaction);
-          case 'agent': return await handleAgent(interaction);
           case 'project': return await handleProject(interaction);
-          case 'plugin': return await handlePlugin(interaction);
-        }
-      }
-
-      if (interaction.isAutocomplete()) {
-        if (interaction.commandName === 'session') {
-          if (interaction.options.getFocused(true).name === 'project') {
-            return await handleProjectAutocomplete(interaction);
-          }
-          return await handleSessionAutocomplete(interaction);
-        }
-        if (interaction.commandName === 'plugin') {
-          return await handlePluginAutocomplete(interaction);
+          case 'agent': return await handleAgent(interaction);
+          case 'subagent': return await handleSubagent(interaction);
+          case 'shell': return await handleShell(interaction);
         }
       }
 
@@ -138,33 +134,43 @@ export async function startBot(): Promise<void> {
     }
   });
 
-  // Channel messages
+  // Messages in session channels (TextChannel) and subagent threads
   client.on('messageCreate', handleMessage);
 
-  // Channel deletion cleanup
+  // Session channel deleted → end the persistent session
   client.on('channelDelete', channel => {
-    if (channel.type === ChannelType.GuildText) {
-      void unlinkChannel(channel.id);
+    const session = getSessionByChannel(channel.id);
+    if (session && session.type === 'persistent') {
+      endSession(session.id).catch(err =>
+        console.error(`Failed to end session on channel delete: ${err.message}`),
+      );
     }
   });
 
-  // Ready
+  // Subagent thread deleted → end the subagent session
+  client.on('threadDelete', thread => {
+    const session = getSessionByChannel(thread.id);
+    if (session && session.type === 'subagent') {
+      endSession(session.id).catch(err =>
+        console.error(`Failed to end subagent session on thread delete: ${err.message}`),
+      );
+    }
+  });
+
+  // Bot ready
   client.once('ready', async () => {
     console.log(`Logged in as ${client.user?.tag}`);
 
-    // Register commands
     await registerCommands();
-
-    // Load persisted state
-    await loadRegistry();
+    await loadProjects();
     await loadSessions();
+    await loadArchived();
 
-    // Set up log channel in the first guild
+    // Find or create #bot-logs channel at the server root (no category)
     const guild = client.guilds.cache.first();
     if (guild) {
-      // Find existing bot-logs channel or note it doesn't exist
       logChannel = guild.channels.cache.find(
-        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText,
+        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
       ) as TextChannel | undefined ?? null;
 
       if (!logChannel) {
@@ -172,31 +178,10 @@ export async function startBot(): Promise<void> {
           logChannel = await guild.channels.create({
             name: 'bot-logs',
             type: ChannelType.GuildText,
+            reason: 'Auto-created by threadcord for bot logs',
           });
         } catch {
           console.warn('Could not create #bot-logs channel');
-        }
-      }
-
-      for (const project of getAllRegisteredProjects()) {
-        try {
-          let category = project.discordCategoryId
-            ? guild.channels.cache.get(project.discordCategoryId)
-            : undefined;
-          if (!category) {
-            category = guild.channels.cache.find(
-              ch => ch.type === ChannelType.GuildCategory && ch.name === project.name,
-            );
-          }
-          if (!category || category.type !== ChannelType.GuildCategory) {
-            const created = await guild.channels.create({
-              name: project.name,
-              type: ChannelType.GuildCategory,
-            });
-            await updateProjectDiscord(project.name, created.id, project.discordLogChannelId);
-          }
-        } catch {
-          // best effort
         }
       }
     }
@@ -205,13 +190,33 @@ export async function startBot(): Promise<void> {
     updatePresence();
     startSync(client);
 
-    // Presence update interval
+    // Presence update every 30s
     setInterval(updatePresence, 30_000);
+
+    // Subagent watchdog every 5 minutes
+    setInterval(() => {
+      runSubagentWatchdog(threadId => {
+        const ch = client.channels.cache.get(threadId);
+        return ch?.isThread() ? ch : undefined;
+      }).catch(err => console.error(`Subagent watchdog error: ${err.message}`));
+    }, 5 * 60 * 1000);
+
+    // Auto-archive check every hour
+    if (config.autoArchiveDays || config.maxActiveSessionsPerProject) {
+      const guild = client.guilds.cache.first();
+      if (guild) {
+        setInterval(() => {
+          checkAutoArchive(guild).catch(err =>
+            console.error(`Auto-archive check error: ${err.message}`),
+          );
+        }, 60 * 60 * 1000);
+      }
+    }
 
     // Message cleanup
     if (config.messageRetentionDays) {
       await cleanupOldMessages();
-      setInterval(cleanupOldMessages, 60 * 60 * 1000); // hourly
+      setInterval(cleanupOldMessages, 60 * 60 * 1000);
     }
   });
 

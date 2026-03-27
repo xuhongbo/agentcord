@@ -3,156 +3,173 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   loadRegistry,
-  getProjectByName,
+  getProjectByName as getRegisteredProjectByName,
   getAllRegisteredProjects,
   getProjectByCategoryId as getRegisteredProjectByCategoryId,
-  updateProjectDiscord,
+  bindProjectCategory,
+  setProjectHistoryChannel,
   updateProject,
 } from './project-registry.ts';
-import type { Project, McpServer } from './types.ts';
+import type { Project, Skill, McpServer } from './types.ts';
 
 export async function loadProjects(): Promise<void> {
   await loadRegistry();
 }
 
-function toLegacyProject(name: string): Project | undefined {
-  const project = getProjectByName(name);
-  if (!project || !project.discordCategoryId) return undefined;
+function toProject(projectName: string): Project | undefined {
+  const project = getRegisteredProjectByName(projectName);
+  if (!project) return undefined;
   return {
+    categoryId: project.discordCategoryId ?? '',
+    historyChannelId: project.historyChannelId,
     name: project.name,
     directory: project.path,
-    categoryId: project.discordCategoryId,
-    logChannelId: project.discordLogChannelId,
     personality: project.personality,
-    skills: project.skills,
+    skills: Object.entries(project.skills).map(([name, prompt]) => ({ name, prompt })),
     mcpServers: project.mcpServers,
+    createdAt: project.createdAt,
   };
 }
 
-export function getProject(name: string): Project | undefined {
-  return toLegacyProject(name);
+export function getProject(categoryId: string): Project | undefined {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return undefined;
+  return {
+    categoryId: project.discordCategoryId ?? categoryId,
+    historyChannelId: project.historyChannelId,
+    name: project.name,
+    directory: project.path,
+    personality: project.personality,
+    skills: Object.entries(project.skills).map(([name, prompt]) => ({ name, prompt })),
+    mcpServers: project.mcpServers,
+    createdAt: project.createdAt,
+  };
+}
+
+export function getProjectByName(name: string): Project | undefined {
+  return toProject(name);
 }
 
 export function getAllProjects(): Record<string, Project> {
   const out: Record<string, Project> = {};
   for (const project of getAllRegisteredProjects()) {
     if (!project.discordCategoryId) continue;
-    out[project.name] = {
+    out[project.discordCategoryId] = {
+      categoryId: project.discordCategoryId,
+      historyChannelId: project.historyChannelId,
       name: project.name,
       directory: project.path,
-      categoryId: project.discordCategoryId,
-      logChannelId: project.discordLogChannelId,
       personality: project.personality,
-      skills: project.skills,
+      skills: Object.entries(project.skills).map(([name, prompt]) => ({ name, prompt })),
       mcpServers: project.mcpServers,
+      createdAt: project.createdAt,
     };
   }
   return out;
 }
 
-export function getProjectByCategoryId(categoryId: string): Project | undefined {
+export async function bindMountedProjectToCategory(
+  projectName: string,
+  categoryId: string,
+  categoryName: string,
+): Promise<Project> {
+  const project = getRegisteredProjectByName(projectName);
+  if (!project) throw new Error(`Mounted project not found: ${projectName}`);
+  if (project.discordCategoryId && project.discordCategoryId !== categoryId) {
+    throw new Error(`Project "${projectName}" is already bound to another Discord category`);
+  }
+  await bindProjectCategory(projectName, categoryId, categoryName);
+  return getProject(categoryId)!;
+}
+
+export function setHistoryChannelId(categoryId: string, channelId: string): void {
   const project = getRegisteredProjectByCategoryId(categoryId);
-  if (!project) return undefined;
-  return {
-    name: project.name,
-    directory: project.path,
-    categoryId: project.discordCategoryId ?? categoryId,
-    logChannelId: project.discordLogChannelId,
-    personality: project.personality,
-    skills: project.skills,
-    mcpServers: project.mcpServers,
-  };
+  if (!project) return;
+  void setProjectHistoryChannel(project.name, channelId);
 }
 
-export function updateProjectCategory(name: string, categoryId: string, logChannelId?: string): void {
-  void updateProjectDiscord(name, categoryId, logChannelId);
+export function getHistoryChannelId(categoryId: string): string | undefined {
+  return getRegisteredProjectByCategoryId(categoryId)?.historyChannelId;
 }
 
-// Personality
-
-export function setPersonality(projectName: string, prompt: string): boolean {
-  const project = getProjectByName(projectName);
-  if (!project) return false;
-  project.personality = prompt;
+export function setPersonality(categoryId: string, personality: string): void {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return;
+  project.personality = personality;
   void updateProject(project);
-  return true;
 }
 
-export function getPersonality(projectName: string): string | undefined {
-  return getProjectByName(projectName)?.personality;
+export function getPersonality(categoryId: string): string | undefined {
+  return getRegisteredProjectByCategoryId(categoryId)?.personality;
 }
 
-export function clearPersonality(projectName: string): boolean {
-  const project = getProjectByName(projectName);
-  if (!project) return false;
+export function clearPersonality(categoryId: string): void {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return;
   delete project.personality;
   void updateProject(project);
-  return true;
 }
 
-// Skills
-
-export function addSkill(projectName: string, name: string, prompt: string): boolean {
-  const project = getProjectByName(projectName);
-  if (!project) return false;
+export function addSkill(categoryId: string, name: string, prompt: string): void {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return;
   project.skills[name] = prompt;
   void updateProject(project);
-  return true;
 }
 
-export function removeSkill(projectName: string, name: string): boolean {
-  const project = getProjectByName(projectName);
+export function removeSkill(categoryId: string, name: string): boolean {
+  const project = getRegisteredProjectByCategoryId(categoryId);
   if (!project || !project.skills[name]) return false;
   delete project.skills[name];
   void updateProject(project);
   return true;
 }
 
-export function getSkills(projectName: string): Record<string, string> {
-  return getProjectByName(projectName)?.skills || {};
+export function getSkills(categoryId: string): Skill[] {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return [];
+  return Object.entries(project.skills).map(([name, prompt]) => ({ name, prompt }));
 }
 
-export function executeSkill(projectName: string, skillName: string, input?: string): string | null {
-  const project = getProjectByName(projectName);
+export function executeSkill(categoryId: string, name: string, input?: string): string | null {
+  const project = getRegisteredProjectByCategoryId(categoryId);
   if (!project) return null;
-  const template = project.skills[skillName];
+  const template = project.skills[name];
   if (!template) return null;
   return input ? template.replace(/\{input\}/g, input) : template.replace(/\{input\}/g, '');
 }
 
-// MCP Servers
-
-export async function addMcpServer(projectDir: string, projectName: string, server: McpServer): Promise<boolean> {
-  const project = getProjectByName(projectName);
-  if (!project) return false;
-
-  const existing = project.mcpServers.findIndex(s => s.name === server.name);
+export async function addMcpServer(categoryId: string, serverName: string, command: string, args?: string[]): Promise<void> {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return;
+  const existing = project.mcpServers.findIndex(server => server.name === serverName);
+  const server: McpServer = {
+    name: serverName,
+    command,
+    ...(args?.length ? { args } : {}),
+  };
   if (existing >= 0) {
     project.mcpServers[existing] = server;
   } else {
     project.mcpServers.push(server);
   }
   await updateProject(project);
-
-  await writeMcpJson(projectDir, project.mcpServers);
-  return true;
+  await writeMcpJson(project.path, project.mcpServers);
 }
 
-export async function removeMcpServer(projectDir: string, projectName: string, name: string): Promise<boolean> {
-  const project = getProjectByName(projectName);
+export async function removeMcpServer(categoryId: string, serverName: string): Promise<boolean> {
+  const project = getRegisteredProjectByCategoryId(categoryId);
   if (!project) return false;
-
-  const idx = project.mcpServers.findIndex(s => s.name === name);
-  if (idx < 0) return false;
-
-  project.mcpServers.splice(idx, 1);
+  const index = project.mcpServers.findIndex(server => server.name === serverName);
+  if (index < 0) return false;
+  project.mcpServers.splice(index, 1);
   await updateProject(project);
-  await writeMcpJson(projectDir, project.mcpServers);
+  await writeMcpJson(project.path, project.mcpServers);
   return true;
 }
 
-export function listMcpServers(projectName: string): McpServer[] {
-  return getProjectByName(projectName)?.mcpServers || [];
+export function getMcpServers(categoryId: string): McpServer[] {
+  return getRegisteredProjectByCategoryId(categoryId)?.mcpServers || [];
 }
 
 async function writeMcpJson(projectDir: string, servers: McpServer[]): Promise<void> {
@@ -165,15 +182,14 @@ async function writeMcpJson(projectDir: string, servers: McpServer[]): Promise<v
       mcpConfig = JSON.parse(existing);
     }
   } catch {
-    // Start fresh
+    // ignore malformed existing file
   }
 
-  const mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {};
+  const mcpServers: Record<string, { command: string; args?: string[] }> = {};
   for (const server of servers) {
     mcpServers[server.name] = {
       command: server.command,
       ...(server.args?.length ? { args: server.args } : {}),
-      ...(server.env ? { env: server.env } : {}),
     };
   }
 

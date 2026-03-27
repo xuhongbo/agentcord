@@ -1,81 +1,71 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import type { TextChannel } from 'discord.js';
+import { execa } from 'execa';
+import type { TextChannel, AnyThreadChannel } from 'discord.js';
 import type { ShellProcess } from './types.ts';
 import { truncate } from './utils.ts';
 
+type SessionChannel = TextChannel | AnyThreadChannel;
+
 const runningProcesses = new Map<number, ShellProcess>();
+const execaProcesses = new Map<number, ReturnType<typeof execa>>();
 let pidCounter = 0;
 
 const TIMEOUT_MS = 60_000;
-const EDIT_DEBOUNCE = 500;
+const DISCORD_OP_TIMEOUT_MS = 5_000;
+
+async function withDiscordTimeout<T>(promise: Promise<T>): Promise<T | null> {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>(resolve => setTimeout(() => resolve(null), DISCORD_OP_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+function renderShellOutput(command: string, output: string): string {
+  const display = truncate(output || '(no output)', 1900);
+  return `\`\`\`\n$ ${command}\n${display}\n\`\`\``;
+}
 
 export async function executeShellCommand(
   command: string,
   cwd: string,
-  channel: TextChannel,
+  channel: SessionChannel,
 ): Promise<void> {
   const pid = ++pidCounter;
-  const child = spawn('bash', ['-c', command], {
+
+  const child = execa('bash', ['-lc', command], {
     cwd,
     env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    reject: false,
+    timeout: TIMEOUT_MS,
+    all: true,
   });
 
   const shellProcess: ShellProcess = {
     pid,
     command,
     startedAt: Date.now(),
-    process: child,
+    process: child as any,
   };
+
   runningProcesses.set(pid, shellProcess);
+  execaProcesses.set(pid, child);
 
-  let output = '';
-  let message = await channel.send(`\`\`\`\n$ ${command}\n\`\`\``);
-  let lastEdit = Date.now();
-  let editTimer: ReturnType<typeof setTimeout> | null = null;
+  await withDiscordTimeout(channel.send(`Running shell command:\n\`${truncate(command, 200)}\``));
 
-  const updateMessage = async () => {
-    const display = truncate(output, 1900);
-    try {
-      await message.edit(`\`\`\`\n$ ${command}\n${display}\n\`\`\``);
-    } catch { /* message deleted */ }
-    lastEdit = Date.now();
-  };
+  const result = await child;
+  const output = [
+    result.all?.trim() || '',
+    result.timedOut ? '[Timed out after 60s]' : '',
+    `[Exit code: ${result.exitCode ?? 'killed'}]`,
+  ].filter(Boolean).join('\n');
 
-  const scheduleEdit = () => {
-    if (editTimer) return;
-    const delay = Math.max(0, EDIT_DEBOUNCE - (Date.now() - lastEdit));
-    editTimer = setTimeout(async () => {
-      editTimer = null;
-      await updateMessage();
-    }, delay);
-  };
+  runningProcesses.delete(pid);
+  execaProcesses.delete(pid);
 
-  const onData = (chunk: Buffer) => {
-    output += chunk.toString();
-    scheduleEdit();
-  };
-
-  child.stdout?.on('data', onData);
-  child.stderr?.on('data', onData);
-
-  // Timeout
-  const timeout = setTimeout(() => {
-    child.kill('SIGTERM');
-    output += '\n[Timed out after 60s]';
-  }, TIMEOUT_MS);
-
-  return new Promise<void>(resolve => {
-    child.on('close', async (code) => {
-      clearTimeout(timeout);
-      if (editTimer) clearTimeout(editTimer);
-      runningProcesses.delete(pid);
-
-      output += `\n[Exit code: ${code ?? 'killed'}]`;
-      await updateMessage();
-      resolve();
-    });
-  });
+  await withDiscordTimeout(channel.send(renderShellOutput(command, output)));
 }
 
 export function listProcesses(): ShellProcess[] {
@@ -83,9 +73,10 @@ export function listProcesses(): ShellProcess[] {
 }
 
 export function killProcess(pid: number): boolean {
-  const proc = runningProcesses.get(pid);
+  const proc = execaProcesses.get(pid);
   if (!proc) return false;
-  proc.process.kill('SIGTERM');
+  proc.kill('SIGTERM');
+  execaProcesses.delete(pid);
   runningProcesses.delete(pid);
   return true;
 }

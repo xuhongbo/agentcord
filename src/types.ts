@@ -1,69 +1,34 @@
-import type { ProviderName, CodexSandboxMode, CodexApprovalPolicy } from './providers/types.ts';
+// Core type definitions for threadcord
+// Structure: Server=Workspace, Category=Project, Channel=Session, Thread=Subagent
 
+export type ProviderName = 'claude' | 'codex';
+export type SessionMode = 'auto' | 'plan' | 'normal' | 'monitor';
+export type SessionType = 'persistent' | 'subagent';
 
-export interface AgentWebhookRef {
-  id: string;
-  token: string;
-}
+// Backward compat alias
+export type ThreadType = SessionType;
 
-export interface AgentData {
-  id: string;
-  name: string;
-  role: string;
-  systemPrompt: string;
+// ─── Channel Session ───────────────────────────────────────────────────────────
+// One Discord channel/thread = one AI agent session
+//   'persistent' → lives in a TextChannel under the project Category
+//   'subagent'   → lives in a Thread under the parent session's TextChannel
+
+export interface ThreadSession {
+  id: string;                    // Internal session ID (sanitized agentLabel + dedup suffix)
+  channelId: string;             // Primary Discord ID: TextChannel.id for persistent, Thread.id for subagent
+  categoryId: string;            // Discord Category ID (= project)
+  projectName: string;           // Project name
+  agentLabel: string;            // Human-readable label, e.g. "fix-login"
   provider: ProviderName;
+  providerSessionId?: string;    // Provider-side session ID for resumption
   model?: string;
-  emoji?: string;
-  avatarUrl?: string;
-  createdAt: number;
-  createdBy: string;
-  channelSessions: Record<string, string>;
-  webhooks: Record<string, AgentWebhookRef>;
-}
-
-// Re-export content block types from providers (used by message-handler, etc.)
-export type {
-  ContentBlock,
-  ImageMediaType,
-  TextBlock,
-  ImageBlock,
-  LocalImageBlock,
-  ProviderName,
-  CodexSandboxMode,
-  CodexApprovalPolicy,
-} from './providers/types.ts';
-
-export interface McpServer {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
-
-export interface Project {
-  name: string;
-  directory: string;
-  categoryId: string;
-  logChannelId?: string;
-  personality?: string;
-  skills: Record<string, string>;
-  mcpServers: McpServer[];
-}
-
-export interface Session {
-  id: string;
-  channelId: string;
-  directory: string;
-  projectName: string;
-  provider: ProviderName;
-  providerSessionId?: string;
-  model?: string;
-  sandboxMode?: CodexSandboxMode;
-  approvalPolicy?: CodexApprovalPolicy;
-  networkAccessEnabled?: boolean;
-  agentPersona?: string;
-  verbose: boolean;
+  type: SessionType;
+  parentChannelId?: string;      // For subagents: parent session's TextChannel ID
+  subagentDepth: number;         // Chain depth (0 = top-level)
+  directory: string;             // Working directory on host machine
   mode: SessionMode;
+  agentPersona?: string;         // Agent persona name
+  verbose: boolean;              // Show tool calls in Discord
   monitorGoal?: string;
   monitorProviderSessionId?: string;
   workflowState: SessionWorkflowState;
@@ -72,43 +37,21 @@ export interface Session {
   lastActivity: number;
   messageCount: number;
   totalCost: number;
-  source?: 'remote' | 'local-sync';
 }
 
-export interface SessionPersistData {
-  id: string;
-  channelId: string;
-  directory: string;
-  projectName: string;
-  provider?: ProviderName;
-  providerSessionId?: string;
-  model?: string;
-  sandboxMode?: CodexSandboxMode;
-  approvalPolicy?: CodexApprovalPolicy;
-  networkAccessEnabled?: boolean;
-  agentPersona?: string;
-  verbose?: boolean;
-  mode?: SessionMode;
-  monitorGoal?: string;
-  monitorProviderSessionId?: string;
-  workflowState?: SessionWorkflowState;
-  createdAt: number;
-  lastActivity: number;
-  messageCount: number;
-  totalCost: number;
-  source?: 'remote' | 'local-sync';
-}
+export type SessionPersistData = Omit<ThreadSession, 'isGenerating'>;
 
-export type SessionMode = 'auto' | 'plan' | 'normal' | 'monitor';
+// ─── Workflow State ───────────────────────────────────────────────────────────
 
 export type SessionWorkflowStatus =
   | 'idle'
   | 'worker_running'
-  | 'monitor_review'
   | 'retrying'
+  | 'monitor_review'
   | 'awaiting_human'
   | 'completed'
-  | 'blocked';
+  | 'blocked'
+  | 'error';
 
 export type SessionWorkflowHookName =
   | 'before_worker_pass'
@@ -116,9 +59,22 @@ export type SessionWorkflowHookName =
   | 'before_monitor_review'
   | 'after_monitor_decision'
   | 'on_stall'
-  | 'on_human_question'
+  | 'on_blocked'
   | 'on_complete'
-  | 'on_blocked';
+  | 'on_human_question';
+
+export interface SessionMonitorFeedbackReport {
+  status: 'complete' | 'continue' | 'blocked';
+  confidence: 'high' | 'medium' | 'low';
+  rationale: string;
+  steering: string;
+  completionSummary: string;
+  acceptedEvidence: string[];
+  missingEvidence: string[];
+  requiredNextProof: string[];
+  disallowedDrift: string[];
+  blockingReason: string;
+}
 
 export interface SessionWorkflowState {
   status: SessionWorkflowStatus;
@@ -132,6 +88,79 @@ export interface SessionWorkflowState {
   awaitingHumanReason?: string;
   updatedAt: number;
 }
+
+// ─── Project ──────────────────────────────────────────────────────────────────
+// One Discord Category = one project/repository
+
+export interface Skill {
+  name: string;
+  prompt: string;
+}
+
+export interface McpServer {
+  name: string;
+  command: string;
+  args?: string[];
+}
+
+export interface Project {
+  categoryId: string;            // Discord Category ID (primary key)
+  historyChannelId?: string;     // Forum channel ID for archived sessions
+  name: string;                  // Project name (= category name)
+  directory: string;             // Default working directory
+  personality?: string;          // Shared system prompt for all agents in this project
+  skills: Skill[];
+  mcpServers: McpServer[];
+  createdAt: number;
+}
+
+export interface Config {
+  token: string;
+  clientId: string;
+  guildId: string;
+  allowedUsers: string[];
+  allowAllUsers: boolean;
+  dataDir: string;
+  defaultProvider: ProviderName;
+  defaultMode: SessionMode;
+  maxSubagentDepth: number;
+  maxActiveSessionsPerProject: number;
+  autoArchiveDays: number;
+  messageRetentionDays: number;
+  rateLimitMs: number;
+  shellEnabled: boolean;
+  shellAllowedUsers: string[];
+  codexSandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
+  codexApprovalPolicy: 'never' | 'on-request' | 'on-failure' | 'untrusted';
+  codexNetworkAccessEnabled: boolean;
+  codexWebSearchMode: 'disabled' | 'cached' | 'live';
+  codexReasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '';
+  codexBaseUrl: string;
+  codexApiKey: string;
+  codexPath: string;
+  anthropicApiKey: string;
+  anthropicBaseUrl: string;
+}
+
+// ─── Archived Session ─────────────────────────────────────────────────────────
+// Sessions moved out of active channels and into the #history Forum
+
+export interface ArchivedSession {
+  id: string;
+  categoryId: string;
+  agentLabel: string;
+  provider: ProviderName;
+  directory: string;
+  mode: SessionMode;
+  createdAt: number;
+  archivedAt: number;
+  messageCount: number;
+  totalCost: number;
+  summary?: string;
+  forumPostId?: string;          // Discord Forum Post (Thread) ID
+}
+
+// ─── Workflow State (extended) ────────────────────────────────────────────────
 
 export interface SessionWorkerProgressReport {
   originalGoal: string;
@@ -150,19 +179,6 @@ export interface SessionWorkerProgressReport {
   blockers: string[];
 }
 
-export interface SessionMonitorFeedbackReport {
-  status: 'complete' | 'continue' | 'blocked';
-  confidence: 'high' | 'medium' | 'low';
-  rationale: string;
-  steering: string;
-  completionSummary: string;
-  acceptedEvidence: string[];
-  missingEvidence: string[];
-  requiredNextProof: string[];
-  disallowedDrift: string[];
-  blockingReason: string;
-}
-
 export interface SessionNextProofContract {
   goal: string;
   acceptedEvidence: string[];
@@ -174,12 +190,16 @@ export interface SessionNextProofContract {
   avoidUntilProved: string[];
 }
 
+// ─── Agent Persona ────────────────────────────────────────────────────────────
+
 export interface AgentPersona {
   name: string;
+  emoji: string;
   description: string;
   systemPrompt: string;
-  emoji: string;
 }
+
+// ─── Shell Process ────────────────────────────────────────────────────────────
 
 export interface ShellProcess {
   pid: number;
@@ -188,20 +208,7 @@ export interface ShellProcess {
   process: import('node:child_process').ChildProcess;
 }
 
-export interface Config {
-  token: string;
-  clientId: string;
-  guildId: string | null;
-  allowedUsers: string[];
-  allowAllUsers: boolean;
-  shellEnabled: boolean;
-  shellAllowedUsers: string[];
-  messageRetentionDays: number | null;
-  rateLimitMs: number;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccessEnabled?: boolean;
-}
+// ─── Expandable Content (for output-handler) ──────────────────────────────────
 
 export interface ExpandableContent {
   content: string;

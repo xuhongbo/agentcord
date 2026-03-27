@@ -3,7 +3,7 @@ import { ensureProvider, type ProviderEvent, type ContentBlock } from './provide
 import { Store } from './persistence.ts';
 import { getAgent } from './agents.ts';
 import { getPersonality } from './project-manager.ts';
-import { sanitizeName, resolvePath, isPathAllowed, isAbortError } from './utils.ts';
+import { sanitizeName, resolvePath, isAbortError } from './utils.ts';
 import type {
   ThreadSession,
   SessionPersistData,
@@ -68,7 +68,7 @@ function createDefaultWorkflowState(): SessionWorkflowState {
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
 export async function loadSessions(): Promise<void> {
-  const data = sessionStore.read();
+  const data = await sessionStore.read();
   if (!data) return;
 
   let cleaned = false;
@@ -124,11 +124,12 @@ async function persistSessionsNow(): Promise<void> {
       agentLabel: s.agentLabel,
       provider: s.provider,
       providerSessionId: s.providerSessionId,
+      model: s.model,
       type: s.type,
       parentChannelId: s.parentChannelId,
       subagentDepth: s.subagentDepth,
       directory: s.directory,
-      mode: s.mode !== 'auto' ? s.mode : undefined as unknown as SessionMode,
+      mode: s.mode,
       agentPersona: s.agentPersona,
       verbose: s.verbose || false,
       monitorGoal: s.monitorGoal,
@@ -140,7 +141,7 @@ async function persistSessionsNow(): Promise<void> {
       totalCost: s.totalCost,
     });
   }
-  sessionStore.write(data);
+  await sessionStore.write(data);
 }
 
 function saveSessions(): Promise<void> {
@@ -165,6 +166,8 @@ export interface CreateSessionParams {
   agentLabel: string;
   provider: ProviderName;
   directory: string;
+  providerSessionId?: string;
+  model?: string;
   type: 'persistent' | 'subagent';
   parentChannelId?: string;      // For subagents: parent session's TextChannel ID
   subagentDepth?: number;
@@ -178,6 +181,8 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     projectName,
     agentLabel,
     provider,
+    providerSessionId,
+    model,
     type,
     parentChannelId,
     subagentDepth = 0,
@@ -185,10 +190,6 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
   } = params;
 
   const resolvedDir = resolvePath(params.directory);
-
-  if (!isPathAllowed(resolvedDir, config.allowedPaths)) {
-    throw new Error(`Directory not in allowed paths: ${resolvedDir}`);
-  }
   if (!existsSync(resolvedDir)) {
     throw new Error(`Directory does not exist: ${resolvedDir}`);
   }
@@ -214,7 +215,8 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     projectName,
     agentLabel,
     provider,
-    providerSessionId: undefined,
+    providerSessionId,
+    model,
     type,
     parentChannelId,
     subagentDepth,
@@ -305,7 +307,7 @@ export function setVerbose(sessionId: string, verbose: boolean): void {
 export function setModel(sessionId: string, model: string): void {
   const session = getSession(sessionId);
   if (session) {
-    (session as any).model = model;
+    session.model = model;
     saveSessions();
   }
 }
@@ -406,7 +408,12 @@ export async function* sendPrompt(
     const stream = provider.sendPrompt(prompt, {
       directory: session.directory,
       providerSessionId: session.providerSessionId,
-      model: (session as any).model,
+      model: session.model,
+      sandboxMode: config.codexSandboxMode,
+      approvalPolicy: config.codexApprovalPolicy,
+      networkAccessEnabled: config.codexNetworkAccessEnabled,
+      webSearchMode: config.codexWebSearchMode,
+      modelReasoningEffort: config.codexReasoningEffort || undefined,
       systemPromptParts,
       abortController: controller,
     });
@@ -456,7 +463,12 @@ export async function* continueSession(
     const stream = provider.continueSession({
       directory: session.directory,
       providerSessionId: session.providerSessionId,
-      model: (session as any).model,
+      model: session.model,
+      sandboxMode: config.codexSandboxMode,
+      approvalPolicy: config.codexApprovalPolicy,
+      networkAccessEnabled: config.codexNetworkAccessEnabled,
+      webSearchMode: config.codexWebSearchMode,
+      modelReasoningEffort: config.codexReasoningEffort || undefined,
       systemPromptParts,
       abortController: controller,
     });
@@ -501,7 +513,12 @@ export async function* sendMonitorPrompt(
   const stream = provider.sendPrompt(prompt, {
     directory: session.directory,
     providerSessionId: session.monitorProviderSessionId,
-    model: (session as any).model,
+    model: session.model,
+    sandboxMode: config.codexSandboxMode,
+    approvalPolicy: config.codexApprovalPolicy,
+    networkAccessEnabled: config.codexNetworkAccessEnabled,
+    webSearchMode: config.codexWebSearchMode,
+    modelReasoningEffort: config.codexReasoningEffort || undefined,
     systemPromptParts,
     abortController: new AbortController(),
   });

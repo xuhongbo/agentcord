@@ -21,7 +21,7 @@ function cancelled(): never {
 export async function runSetup(): Promise<void> {
   const isReconfigure = !!getConfigValue('DISCORD_TOKEN');
 
-  p.intro(bold(' agentcord setup '));
+  p.intro(bold(' threadcord setup '));
 
   if (isReconfigure) {
     p.note(
@@ -150,7 +150,7 @@ export async function runSetup(): Promise<void> {
           `${bold('2.')} Click on your profile picture or username`,
           `${bold('3.')} Click ${green('"Copy User ID"')}`,
           '',
-          dim('You can add more users later with: agentcord config set ALLOWED_USERS <ids>'),
+          dim('You can add more users later with: threadcord config set ALLOWED_USERS <ids>'),
         ].join('\n'),
         'How to get your User ID',
       );
@@ -256,14 +256,14 @@ export async function runSetup(): Promise<void> {
     } catch (err: unknown) {
       s.stop(`Connection failed: ${(err as Error).message}`);
       p.log.warn('Double-check your bot token and try again.');
-      p.log.info(`You can re-run setup with: ${cyan('agentcord config setup')}`);
+      p.log.info(`You can re-run setup with: ${cyan('threadcord config setup')}`);
     }
   }
 
   // ─── Step 9: Install Daemon ───
 
   const installDaemon = await p.confirm({
-    message: 'Start agentcord as a background service? (auto-starts on boot, restarts on crash)',
+    message: 'Start threadcord as a background service? (auto-starts on boot, restarts on crash)',
     initialValue: true,
   });
   if (p.isCancel(installDaemon)) cancelled();
@@ -276,32 +276,32 @@ export async function runSetup(): Promise<void> {
       s.stop(green('Background service installed and running'));
     } catch (err: unknown) {
       s.stop(`Service install failed: ${(err as Error).message}`);
-      p.log.warn(`You can install it later with: ${cyan('agentcord daemon install')}`);
+      p.log.warn(`You can install it later with: ${cyan('threadcord daemon install')}`);
     }
   }
 
   // ─── Done ───
 
   const nextSteps = [
-    `Use ${bold('/session new <name>')} in Discord to create your first session.`,
+    `Use ${bold('/project setup project:<name>')} and ${bold('/agent spawn label:<task>')} in Discord to create your first session.`,
   ];
 
   if (!installDaemon) {
     nextSteps.unshift(
-      `Start the bot:  ${cyan('agentcord')}`,
+      `Start the bot:  ${cyan('threadcord')}`,
       '',
     );
   } else {
     nextSteps.unshift(
       `The bot is running in the background.`,
-      `Check status:   ${cyan('agentcord daemon status')}`,
-      `View logs:      ${cyan('tail -f ~/.agentcord/agentcord.log')}`,
+      `Check status:   ${cyan('threadcord daemon status')}`,
+      `View logs:      ${cyan('tail -f ~/.threadcord/threadcord.log')}`,
       '',
     );
   }
 
-  nextSteps.push('', `Re-run setup:   ${cyan('agentcord config setup')}`);
-  nextSteps.push(`View config:    ${cyan('agentcord config list')}`);
+  nextSteps.push('', `Re-run setup:   ${cyan('threadcord config setup')}`);
+  nextSteps.push(`View config:    ${cyan('threadcord config list')}`);
 
   p.note(nextSteps.join('\n'), 'Next Steps');
 

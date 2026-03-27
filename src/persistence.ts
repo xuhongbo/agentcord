@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 let dataDirOverride: string | null = null;
 
 function getDataDir(): string {
-  return dataDirOverride ?? join(homedir(), '.agentcord');
+  return dataDirOverride ?? join(homedir(), '.threadcord');
 }
 
 /** 仅测试时使用，覆盖数据目录 */

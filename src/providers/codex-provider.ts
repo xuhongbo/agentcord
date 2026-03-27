@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { config } from '../config.ts';
 import type {
   Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
 } from './types.ts';
@@ -15,8 +16,8 @@ async function loadSdk(): Promise<void> {
 }
 
 // AGENTS.md sentinel for persona injection
-const SENTINEL_START = '<!-- agentcord-persona-start -->';
-const SENTINEL_END = '<!-- agentcord-persona-end -->';
+const SENTINEL_START = '<!-- threadcord-persona-start -->';
+const SENTINEL_END = '<!-- threadcord-persona-end -->';
 
 function injectAgentsMd(directory: string, parts: string[]): string | null {
   if (parts.length === 0) return null;
@@ -61,7 +62,7 @@ function writeImagesToTemp(blocks: ContentBlock[]): { textParts: string[]; local
       textParts.push(block.text);
     } else if (block.type === 'image') {
       // Write base64 to a temp file
-      const dir = mkdtempSync(join(tmpdir(), 'agentcord-img-'));
+      const dir = mkdtempSync(join(tmpdir(), 'threadcord-img-'));
       const ext = block.source.media_type.split('/')[1] || 'png';
       const filePath = join(dir, `image.${ext}`);
       writeFileSync(filePath, Buffer.from(block.source.data, 'base64'));
@@ -113,7 +114,11 @@ export class CodexProvider implements Provider {
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
 
-      const codex = new Codex();
+      const codexOpts: Record<string, any> = {};
+      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
+      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
+      const codex = new Codex(codexOpts);
 
       const threadOptions: Record<string, any> = {
         workingDirectory: options.directory,
@@ -124,6 +129,12 @@ export class CodexProvider implements Provider {
       if (options.approvalPolicy) threadOptions.approvalPolicy = options.approvalPolicy;
       if (options.networkAccessEnabled !== undefined) {
         threadOptions.networkAccessEnabled = options.networkAccessEnabled;
+      }
+      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
+        threadOptions.webSearchMode = options.webSearchMode;
+      }
+      if (options.modelReasoningEffort) {
+        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
       }
 
       const thread = options.providerSessionId
@@ -152,7 +163,11 @@ export class CodexProvider implements Provider {
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
 
-      const codex = new Codex();
+      const codexOpts: Record<string, any> = {};
+      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
+      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
+      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
+      const codex = new Codex(codexOpts);
       const threadOptions: Record<string, any> = {
         workingDirectory: options.directory,
         skipGitRepoCheck: true,
@@ -162,6 +177,12 @@ export class CodexProvider implements Provider {
       if (options.approvalPolicy) threadOptions.approvalPolicy = options.approvalPolicy;
       if (options.networkAccessEnabled !== undefined) {
         threadOptions.networkAccessEnabled = options.networkAccessEnabled;
+      }
+      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
+        threadOptions.webSearchMode = options.webSearchMode;
+      }
+      if (options.modelReasoningEffort) {
+        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
       }
       const thread = codex.resumeThread(options.providerSessionId, threadOptions);
       const { events } = await thread.runStreamed('Continue from where you left off.');
@@ -233,7 +254,7 @@ export class CodexProvider implements Provider {
                 yield {
                   type: 'command_execution',
                   command: item.command || '',
-                  output: item.output || '',
+                  output: item.aggregated_output ?? item.output ?? '',
                   exitCode: item.exit_code ?? item.exitCode ?? null,
                   status: item.status || 'completed',
                 };
@@ -241,8 +262,8 @@ export class CodexProvider implements Provider {
 
               case 'file_change': {
                 const changes = (item.changes || item.files || []).map((f: any) => ({
-                  filePath: f.file_path || f.filePath || f.path || '',
-                  changeKind: (f.change_kind || f.changeKind || f.action || 'update') as 'add' | 'update' | 'delete',
+                  filePath: f.path || f.file_path || f.filePath || '',
+                  changeKind: (f.kind || f.change_kind || f.changeKind || 'update') as 'add' | 'update' | 'delete',
                 }));
                 if (changes.length > 0) {
                   yield { type: 'file_change', changes };
@@ -283,6 +304,10 @@ export class CodexProvider implements Provider {
                     isError: item.status === 'failed',
                   };
                 }
+                break;
+
+              case 'web_search':
+                yield { type: 'web_search', query: item.query || '' };
                 break;
 
               case 'error':

@@ -12,15 +12,15 @@ import {
 
 function printHelp(): void {
   console.log(`
-\x1b[1magentcord config\x1b[0m — manage global configuration
+\x1b[1mthreadcord config\x1b[0m — manage global configuration
 
 \x1b[1mUsage:\x1b[0m
-  agentcord config setup            Interactive configuration wizard
-  agentcord config get <key>        Read a configuration value
-  agentcord config set <key> <val>  Write a configuration value
-  agentcord config unset <key>      Remove a configuration value
-  agentcord config list             List all configuration values
-  agentcord config path             Show the config file path
+  threadcord config setup            Interactive configuration wizard
+  threadcord config get <key>        Read a configuration value
+  threadcord config set <key> <val>  Write a configuration value
+  threadcord config unset <key>      Remove a configuration value
+  threadcord config list             List all configuration values
+  threadcord config path             Show the config file path
 
 \x1b[1mValid keys:\x1b[0m
   ${Array.from(VALID_KEYS).join(', ')}
@@ -40,7 +40,7 @@ export async function handleConfig(args: string[]): Promise<void> {
     case 'get': {
       const key = rest[0];
       if (!key) {
-        console.error('Usage: agentcord config get <key>');
+        console.error('Usage: threadcord config get <key>');
         process.exit(1);
       }
       if (!VALID_KEYS.has(key)) {
@@ -60,7 +60,7 @@ export async function handleConfig(args: string[]): Promise<void> {
     case 'set': {
       const [key, value] = rest;
       if (!key || value === undefined) {
-        console.error('Usage: agentcord config set <key> <value>');
+        console.error('Usage: threadcord config set <key> <value>');
         process.exit(1);
       }
       const err = validateConfigValue(key, value);
@@ -77,7 +77,7 @@ export async function handleConfig(args: string[]): Promise<void> {
     case 'unset': {
       const key = rest[0];
       if (!key) {
-        console.error('Usage: agentcord config unset <key>');
+        console.error('Usage: threadcord config unset <key>');
         process.exit(1);
       }
       if (!VALID_KEYS.has(key)) {
@@ -93,7 +93,7 @@ export async function handleConfig(args: string[]): Promise<void> {
       const all = getAllConfig();
       const keys = Object.keys(all);
       if (keys.length === 0) {
-        console.log('(no configuration set — run \x1b[36magentcord config setup\x1b[0m)');
+        console.log('(no configuration set — run \x1b[36mthreadcord config setup\x1b[0m)');
       } else {
         for (const key of keys) {
           const value = all[key] as string;

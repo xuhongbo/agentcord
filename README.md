@@ -1,142 +1,127 @@
-# agentcord
+# threadcord
 
-Run and manage AI coding agent sessions on your machine through Discord. Supports [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and OpenAI Codex.
+通过 Discord 在本机运行和管理多代理编程会话。
 
-Each session gets a Discord channel for chatting with the agent. Sessions are organized by project — create multiple sessions in the same codebase, each with their own channel.
+## 核心模型
 
-## Quick Start
-
-```bash
-npm install -g agentcord
-mkdir my-bot && cd my-bot
-agentcord setup
-agentcord
-```
-
-The setup wizard walks you through creating a Discord app, configuring the bot token, and adding it to your server.
-
-## Requirements
-
-- **Node.js 22.6+** (uses native TypeScript execution)
-- **Claude Code** installed on the machine (`@anthropic-ai/claude-agent-sdk`)
-- **OpenAI Codex SDK** for Codex sessions (`@openai/codex-sdk`)
-
-## How It Works
-
-```
-Discord message → SDK query() → coding agent
-                                      ↓
-Discord embeds ← stream processing ← async iterator
-```
-
-The agent SDK handles structured streaming for Discord interaction. You can also resume sessions in your terminal using `claude --resume <session-id>` or `codex --resume <session-id>`.
-
-**Project-based organization**:
-
-```
+```text
 Discord Server
-  └── my-api (category)
-  │    ├── #claude-fix-auth        ← session in ~/Dev/my-api
-  │    ├── #claude-add-tests       ← another session, same project
-  │    └── #project-logs
-  └── frontend (category)
-       ├── #claude-redesign        ← session in ~/Dev/frontend
-       └── #project-logs
+└─ Category = Project
+   ├─ #history (Forum) = Archived Sessions
+   └─ #claude-fix-login = Main Agent Session
+      └─ [sub:codex] benchmark = Subagent Thread
 ```
 
-## Discord Commands
+- `Category` 表示一个已挂载并绑定的本地项目
+- `TextChannel` 表示一个主代理会话
+- `Thread` 表示一个子代理
+- `#history` Forum 用于归档历史会话
 
-### Sessions
-
-| Command | Description |
-|---------|-------------|
-| `/session new <name> [directory]` | Create a session with a Discord channel |
-| `/session list` | List active sessions grouped by project |
-| `/session end` | End the session in the current channel |
-| `/session continue` | Continue the conversation |
-| `/session stop` | Abort current generation |
-| `/session attach` | Show command to resume session in terminal |
-| `/session model <model>` | Change model for the session |
-| `/session verbose` | Toggle tool call/result visibility |
-| `/session sync` | Reconnect orphaned provider channels |
-
-### Shell
-
-| Command | Description |
-|---------|-------------|
-| `/shell run <command>` | Execute a command in the session directory |
-| `/shell processes` | List running background processes |
-| `/shell kill <pid>` | Kill a process |
-
-### Agent Personas
-
-| Command | Description |
-|---------|-------------|
-| `/agent use <persona>` | Switch persona (code-reviewer, architect, debugger, security, performance, devops) |
-| `/agent list` | List available personas |
-| `/agent clear` | Reset to default |
-
-### Project Config
-
-| Command | Description |
-|---------|-------------|
-| `/project personality <prompt>` | Set a custom system prompt for the project |
-| `/project personality-show` | Show current personality |
-| `/project personality-clear` | Remove personality |
-| `/project skill-add <name> <prompt>` | Add a reusable prompt template (`{input}` placeholder) |
-| `/project skill-run <name> [input]` | Execute a skill |
-| `/project skill-list` | List skills |
-| `/project mcp-add <name> <command>` | Register an MCP server (writes `.mcp.json`) |
-| `/project mcp-list` | List MCP servers |
-| `/project info` | Show project config summary |
-
-## Features
-
-- **Real-time streaming** — Agent responses stream into Discord with edit-in-place updates
-- **Typing indicator** — Shows "Bot is typing..." while the agent is working
-- **Message interruption** — Send a new message to automatically interrupt and redirect the agent
-- **Interactive prompts** — Multi-choice questions render as Discord buttons
-- **Task board** — Agent task lists display as visual embeds with status emojis
-- **Tool output control** — Hidden by default, toggle with `/claude verbose`
-- **Per-project customization** — System prompts, skills, and MCP servers scoped to projects
-- **Agent personas** — Switch between specialized roles (code reviewer, architect, etc.)
-- **Session persistence** — Sessions survive bot restarts
-- **Terminal access** — Resume any session in your terminal with the provider CLI
-
-## Configuration
-
-The setup wizard (`agentcord setup`) creates a `.env` file. You can also edit it directly:
-
-```env
-# Required
-DISCORD_TOKEN=your-bot-token
-DISCORD_CLIENT_ID=your-client-id
-
-# Optional
-DISCORD_GUILD_ID=your-guild-id        # Instant command registration
-ALLOWED_USERS=123456789,987654321      # Comma-separated user IDs
-ALLOW_ALL_USERS=false                  # Or true to skip whitelist
-ALLOWED_PATHS=/Users/me/Dev            # Restrict accessible directories
-DEFAULT_DIRECTORY=/Users/me/Dev        # Default for new sessions
-CODEX_SANDBOX_MODE=workspace-write     # read-only | workspace-write | danger-full-access
-CODEX_APPROVAL_POLICY=on-request       # never | on-request | on-failure | untrusted
-CODEX_NETWORK_ACCESS_ENABLED=true      # true | false
-```
-
-You can also override Codex policy per session when creating/resuming via:
-- `/session new ... sandbox-mode:<mode> approval-policy:<policy> network-access:<bool>`
-- `/session resume ... sandbox-mode:<mode> approval-policy:<policy> network-access:<bool>`
-
-## Development
+## 安装
 
 ```bash
-git clone https://github.com/radu2lupu/agentcord.git
-cd agentcord
-npm install
-cp .env.example .env   # fill in your values
-npm run dev            # start with --watch
+pnpm install
+pnpm build
+pnpm link --global
 ```
 
-## License
+安装后会得到全局命令：
 
-MIT
+```bash
+threadcord
+```
+
+## 初始化
+
+### 1. 配置全局凭据
+
+```bash
+threadcord config setup
+```
+
+或直接写入：
+
+```bash
+threadcord config set DISCORD_TOKEN <token>
+threadcord config set DISCORD_CLIENT_ID <client-id>
+threadcord config set DISCORD_GUILD_ID <guild-id>
+threadcord config set ALLOW_ALL_USERS true
+```
+
+### 2. 显式挂载本地项目
+
+在项目目录内执行：
+
+```bash
+threadcord project init --name my-project
+```
+
+### 3. 启动机器人
+
+```bash
+threadcord
+```
+
+### 4. 在 Discord 中绑定项目
+
+在目标 Category 下任意文本频道执行：
+
+```text
+/project setup project:my-project
+```
+
+绑定成功后会自动创建或复用 `#history` Forum。
+
+## 主要命令
+
+### 本地 CLI
+
+```bash
+threadcord config setup
+threadcord config get <key>
+threadcord config set <key> <value>
+threadcord config list
+threadcord config path
+
+threadcord project init [--name <name>]
+threadcord project list
+threadcord project info
+threadcord project rename <new-name>
+threadcord project remove
+
+threadcord daemon install
+threadcord daemon uninstall
+threadcord daemon status
+```
+
+### Discord Slash Commands
+
+- `/project setup`：把当前 Category 绑定到已挂载项目
+- `/project info`：查看项目信息
+- `/agent spawn`：创建主代理会话频道
+- `/agent archive`：归档当前主会话到 `#history`
+- `/agent mode` / `/agent goal` / `/agent persona` / `/agent model`
+- `/subagent run`：在当前主会话下创建子代理线程
+- `/subagent list`：查看当前会话的子代理
+- `/shell run` / `/shell processes` / `/shell kill`
+
+## 特性
+
+- 全局配置：不依赖 `.env` 主运行路径
+- 显式项目挂载：本地先 `threadcord project init`
+- Discord 项目绑定：再用 `/project setup`
+- 子代理线程模型
+- `#history` Forum 归档
+- 自动归档
+- 支持 Claude 与 Codex
+- 支持 `CODEX_PATH`、`CODEX_API_KEY`、`CODEX_BASE_URL`
+- 支持 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`
+- 支持后台守护进程安装
+
+## 开发验证
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm test
+```

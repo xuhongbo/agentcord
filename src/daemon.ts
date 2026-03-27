@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 
-const LABEL = 'com.agentcord';
-const SERVICE_NAME = 'agentcord';
+const LABEL = 'com.threadcord';
+const SERVICE_NAME = 'threadcord';
 
 function getMacPlistPath(): string {
   return join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
@@ -22,7 +22,7 @@ function getNodePath(): string {
 function getCliPath(): string {
   // When installed globally, find the actual cli.js path
   try {
-    const result = execSync('which agentcord', { encoding: 'utf-8' }).trim();
+    const result = execSync('which threadcord', { encoding: 'utf-8' }).trim();
     if (result) {
       // Resolve symlink to get the real path
       const realPath = execSync(`readlink -f "${result}" 2>/dev/null || realpath "${result}" 2>/dev/null || echo "${result}"`, { encoding: 'utf-8' }).trim();
@@ -62,9 +62,9 @@ function generateMacPlist(workDir: string, logDir: string): string {
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>${join(logDir, 'agentcord.log')}</string>
+        <string>${join(logDir, 'threadcord.log')}</string>
     <key>StandardErrorPath</key>
-    <string>${join(logDir, 'agentcord.error.log')}</string>
+        <string>${join(logDir, 'threadcord.error.log')}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -79,7 +79,7 @@ function generateSystemdUnit(workDir: string): string {
   const cliPath = getCliPath();
 
   return `[Unit]
-Description=agentcord - Discord AI agent bot
+Description=threadcord - Discord AI agent bot
 After=network.target
 
 [Service]
@@ -96,7 +96,7 @@ WantedBy=default.target
 }
 
 async function install(): Promise<void> {
-  const workDir = join(homedir(), '.agentcord');
+  const workDir = join(homedir(), '.threadcord');
   const isMac = platform() === 'darwin';
 
   if (isMac) {
@@ -114,8 +114,8 @@ async function install(): Promise<void> {
 
     p.log.success('LaunchAgent installed and started.');
     p.log.info(`Plist:  ${plistPath}`);
-    p.log.info(`Logs:   ${join(logDir, 'agentcord.log')}`);
-    p.log.info(`Errors: ${join(logDir, 'agentcord.error.log')}`);
+    p.log.info(`Logs:   ${join(logDir, 'threadcord.log')}`);
+    p.log.info(`Errors: ${join(logDir, 'threadcord.error.log')}`);
   } else {
     const servicePath = getLinuxServicePath();
     const serviceDir = resolve(servicePath, '..');
@@ -232,15 +232,15 @@ export async function handleDaemon(subcommand: string | undefined): Promise<void
       break;
     default:
       console.log(`
-  \x1b[1magentcord daemon\x1b[0m — manage background service
+  \x1b[1mthreadcord daemon\x1b[0m — manage background service
 
   \x1b[1mUsage:\x1b[0m
-    agentcord daemon install     Install and start as background service
-    agentcord daemon uninstall   Stop and remove the background service
-    agentcord daemon status      Check if the service is running
+    threadcord daemon install     Install and start as background service
+    threadcord daemon uninstall   Stop and remove the background service
+    threadcord daemon status      Check if the service is running
 
   The service auto-starts on boot and restarts on crash.
-  Run \x1b[36magentcord config setup\x1b[0m first to configure the bot.
+  Run \x1b[36mthreadcord config setup\x1b[0m first to configure the bot.
 `);
   }
 }

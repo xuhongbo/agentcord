@@ -1,189 +1,151 @@
-import type { Message, TextChannel } from 'discord.js';
+import {
+  ChannelType,
+  EmbedBuilder,
+  type Message,
+  type TextChannel,
+  type AnyThreadChannel,
+} from 'discord.js';
 import sharp from 'sharp';
 import { config } from './config.ts';
-import * as sessions from './session-manager.ts';
+import { getSessionByChannel } from './thread-manager.ts';
 import { executeSessionPrompt } from './session-executor.ts';
 import { isUserAllowed, isAbortError } from './utils.ts';
-import type { ContentBlock, ImageMediaType } from './types.ts';
+import type { ContentBlock, ImageBlock, ImageMediaType } from './providers/types.ts';
 
-const SUPPORTED_IMAGE_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-]);
-const TEXT_CONTENT_TYPES = new Set([
-  'text/plain', 'text/markdown', 'text/csv', 'text/html', 'text/xml',
-  'application/json', 'application/xml', 'application/javascript',
-  'application/typescript', 'application/x-yaml',
-]);
-const TEXT_EXTENSIONS = new Set([
-  '.txt', '.md', '.json', '.yaml', '.yml', '.xml', '.csv', '.html', '.css',
-  '.js', '.ts', '.jsx', '.tsx', '.swift', '.py', '.rb', '.go', '.rs', '.java',
-  '.kt', '.c', '.cpp', '.h', '.hpp', '.sh', '.bash', '.zsh', '.toml', '.ini',
-  '.cfg', '.conf', '.env', '.log', '.sql', '.graphql', '.proto', '.diff', '.patch',
-]);
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
-const MAX_TEXT_FILE_SIZE = 512 * 1024; // 512 KB
-// Base64 adds ~33% overhead, so raw bytes limit is ~3.75 MB to stay under 5 MB base64
-const MAX_RAW_BYTES = Math.floor((5 * 1024 * 1024) * 3 / 4);
+type SessionChannel = TextChannel | AnyThreadChannel;
 
-const userLastMessage = new Map<string, number>();
+// Per-user rate limiting: userId:channelId → timestamp
+const lastMessageTime = new Map<string, number>();
 
-async function resizeImageToFit(buf: Buffer): Promise<Buffer> {
-  const meta = await sharp(buf).metadata();
-  const width = meta.width || 1;
-  const height = meta.height || 1;
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+const TEXT_EXTS = new Set(['.txt', '.md', '.log', '.json', '.ts', '.js', '.py', '.sh', '.yaml', '.yml', '.toml', '.env', '.csv']);
+const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024; // 5MB
 
-  // Always convert to JPEG for reliable compression
-  let scale = 1;
-  for (let i = 0; i < 5; i++) {
-    scale *= 0.7;
-    const resized = await sharp(buf)
-      .resize(Math.round(width * scale), Math.round(height * scale), { fit: 'inside' })
-      .jpeg({ quality: 80 })
-      .toBuffer();
-    if (resized.length <= MAX_RAW_BYTES) return resized;
-  }
-
-  // Last resort: aggressive resize
-  return sharp(buf)
-    .resize(Math.round(width * scale * 0.5), Math.round(height * scale * 0.5), { fit: 'inside' })
-    .jpeg({ quality: 60 })
-    .toBuffer();
-}
-
-function isTextAttachment(contentType: string | null, filename: string | null): boolean {
-  if (contentType && TEXT_CONTENT_TYPES.has(contentType.split(';')[0])) return true;
-  if (filename) {
-    const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
-    if (TEXT_EXTENSIONS.has(ext)) return true;
-  }
-  return false;
-}
-
-async function fetchTextFile(url: string): Promise<string> {
+async function fetchAttachment(url: string): Promise<Buffer> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download file: ${res.status}`);
-  return res.text();
+  if (!res.ok) throw new Error(`Failed to fetch attachment: ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 
-async function fetchImageAsBase64(url: string, mediaType: string): Promise<{ data: string; mediaType: ImageMediaType }> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download image: ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+function getExtension(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+}
 
-  if (buf.length > MAX_RAW_BYTES) {
-    const resized = await resizeImageToFit(buf);
-    return { data: resized.toString('base64'), mediaType: 'image/jpeg' };
+function mimeToMediaType(ext: string): ImageMediaType {
+  switch (ext) {
+    case '.jpg': case '.jpeg': return 'image/jpeg';
+    case '.gif': return 'image/gif';
+    case '.webp': return 'image/webp';
+    default: return 'image/png';
+  }
+}
+
+async function buildImageBlock(data: Buffer, ext: string): Promise<ImageBlock> {
+  let processed = data;
+
+  if (data.length > MAX_IMAGE_BASE64_BYTES) {
+    try {
+      processed = await sharp(data)
+        .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
+        .toBuffer();
+    } catch {
+      processed = data;
+    }
   }
 
-  return { data: buf.toString('base64'), mediaType: mediaType as ImageMediaType };
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: mimeToMediaType(ext),
+      data: processed.toString('base64'),
+    },
+  };
 }
 
 export async function handleMessage(message: Message): Promise<void> {
+  // Ignore bots
   if (message.author.bot) return;
 
-  // Only handle messages in session channels
-  const session = sessions.getSessionByChannel(message.channelId);
+  const channel = message.channel;
+
+  // Only handle messages in:
+  //   - GuildText channels (persistent sessions — Category > Channel > messages)
+  //   - Threads (subagent sessions — Category > Channel > Thread > messages)
+  const isSessionChannel = channel.type === ChannelType.GuildText;
+  const isSubagentThread = channel.isThread();
+
+  if (!isSessionChannel && !isSubagentThread) return;
+
+  // Look up session by the channel/thread ID (both persistent and subagent sessions use this key)
+  const session = getSessionByChannel(channel.id);
   if (!session) return;
 
-  // Auth check
+  // Authorization
   if (!isUserAllowed(message.author.id, config.allowedUsers, config.allowAllUsers)) {
+    await (channel as SessionChannel).send('You are not authorized to use this bot.').catch(() => {});
     return;
   }
 
-  // Rate limit
+  // Per-user+channel rate limiting
+  const rateKey = `${message.author.id}:${channel.id}`;
   const now = Date.now();
-  const lastMsg = userLastMessage.get(message.author.id) || 0;
-  if (now - lastMsg < config.rateLimitMs) {
-    await message.react('⏳');
+  const last = lastMessageTime.get(rateKey) || 0;
+  if (now - last < config.rateLimitMs) {
+    return; // silently drop
+  }
+  lastMessageTime.set(rateKey, now);
+
+  // Guard: already generating
+  if (session.isGenerating) {
+    await (channel as SessionChannel).send('*Agent is already generating. Stop it first with `/agent stop`.*').catch(() => {});
     return;
   }
-  userLastMessage.set(message.author.id, now);
 
-  // Interrupt current generation if active
-  if (session.isGenerating) {
-    sessions.abortSession(session.id);
-    // Give a brief moment for the stream to wind down
-    await new Promise(r => setTimeout(r, 200));
+  // Build content blocks from message text + attachments
+  const blocks: ContentBlock[] = [];
+
+  if (message.content.trim()) {
+    blocks.push({ type: 'text', text: message.content.trim() });
   }
 
-  const text = message.content.trim();
+  for (const attachment of message.attachments.values()) {
+    const ext = getExtension(attachment.name || '');
 
-  // Classify attachments: image, text, or skip (video/audio/etc.)
-  const imageAttachments = message.attachments.filter(
-    a => a.contentType && SUPPORTED_IMAGE_TYPES.has(a.contentType) && a.size <= MAX_IMAGE_SIZE,
-  );
-  const textAttachments = message.attachments.filter(
-    a => !SUPPORTED_IMAGE_TYPES.has(a.contentType ?? '')
-      && !(a.contentType?.startsWith('video/') || a.contentType?.startsWith('audio/'))
-      && (isTextAttachment(a.contentType, a.name) || !a.contentType)
-      && a.size <= MAX_TEXT_FILE_SIZE,
-  );
-
-  if (!text && imageAttachments.size === 0 && textAttachments.size === 0) return;
-
-  try {
-    const channel = message.channel as TextChannel;
-    const hasAttachments = imageAttachments.size > 0 || textAttachments.size > 0;
-
-    let prompt: string | ContentBlock[];
-    if (!hasAttachments) {
-      prompt = text;
-    } else {
-      const blocks: ContentBlock[] = [];
-
-      // Fetch text files and prepend as text blocks
-      const textResults = await Promise.allSettled(
-        textAttachments.map(async a => ({
-          name: a.name ?? 'file',
-          content: await fetchTextFile(a.url),
-        })),
-      );
-      for (const result of textResults) {
-        if (result.status === 'fulfilled') {
-          blocks.push({
-            type: 'text',
-            text: `<file name="${result.value.name}">\n${result.value.content}\n</file>`,
-          });
-        }
+    if (IMAGE_EXTS.has(ext)) {
+      try {
+        const data = await fetchAttachment(attachment.url);
+        const imageBlock = await buildImageBlock(data, ext);
+        blocks.push(imageBlock);
+      } catch {
+        // Skip attachment on error
       }
-
-      // Fetch images as base64
-      const imageResults = await Promise.allSettled(
-        imageAttachments.map(a => fetchImageAsBase64(a.url, a.contentType!)),
-      );
-      for (const result of imageResults) {
-        if (result.status === 'fulfilled') {
-          blocks.push({
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: result.value.mediaType,
-              data: result.value.data,
-            },
-          });
-        }
+    } else if (TEXT_EXTS.has(ext) && attachment.size < 100_000) {
+      try {
+        const data = await fetchAttachment(attachment.url);
+        blocks.push({ type: 'text', text: `[${attachment.name}]\n${data.toString('utf-8')}` });
+      } catch {
+        // Skip
       }
-
-      // Add user text or a default prompt
-      if (text) {
-        blocks.push({ type: 'text', text });
-      } else if (imageAttachments.size > 0 && textAttachments.size === 0) {
-        blocks.push({ type: 'text', text: 'What is in this image?' });
-      } else {
-        blocks.push({ type: 'text', text: 'Here are the attached files.' });
-      }
-
-      prompt = blocks;
     }
+  }
 
-    await executeSessionPrompt(session, channel, prompt, { updateMonitorGoal: true });
-  } catch (err: unknown) {
-    if (isAbortError(err)) {
-      return;
+  if (blocks.length === 0) return;
+
+  await executeSessionPrompt(session, channel as SessionChannel, blocks.length === 1 && blocks[0].type === 'text'
+    ? (blocks[0] as { type: 'text'; text: string }).text
+    : blocks);
+
+  // After a subagent finishes, notify the parent session channel
+  if (session.type === 'subagent' && session.parentChannelId && message.guild) {
+    const parentChannel = message.guild.channels.cache.get(session.parentChannelId) as TextChannel | undefined;
+    if (parentChannel?.isTextBased() && !parentChannel.isThread()) {
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle(`✅ Subagent Finished: ${session.agentLabel}`)
+        .setDescription(`<#${session.channelId}> has completed a pass. Review the thread for output.`);
+      await parentChannel.send({ embeds: [embed] }).catch(() => {});
     }
-    await message.reply({
-      content: `Error: ${(err as Error).message || 'Unknown error'}`,
-      allowedMentions: { repliedUser: false },
-    });
   }
 }

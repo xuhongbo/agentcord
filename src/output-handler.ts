@@ -6,8 +6,11 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   type TextChannel,
+  type AnyThreadChannel,
   type Message,
 } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import { existsSync } from 'node:fs';
 import type { ProviderEvent, ProviderName } from './providers/types.ts';
 import { splitMessage, truncate, detectNumberedOptions, detectYesNoPrompt, isAbortError } from './utils.ts';
@@ -18,15 +21,13 @@ import {
   renderReasoningEmbed,
   renderCodexTodoListEmbed,
 } from './codex-renderer.ts';
-import { getSession } from './session-manager.ts';
+import { getSession } from './thread-manager.ts';
 
 // In-memory store for expandable content (with TTL cleanup)
 const expandableStore = new Map<string, ExpandableContent>();
 let expandCounter = 0;
 
-// Pending answers for multi-question AskUserQuestion (sessionId → questionIndex → answer)
 const pendingAnswersStore = new Map<string, Map<number, string>>();
-// Total question count per session for multi-question flows
 const questionCountStore = new Map<string, number>();
 
 export function setPendingAnswer(sessionId: string, questionIndex: number, answer: string): void {
@@ -52,7 +53,7 @@ export function getQuestionCount(sessionId: string): number {
 // Clean up expired expandable content every 5 minutes
 setInterval(() => {
   const now = Date.now();
-  const TTL = 10 * 60 * 1000; // 10 minutes
+  const TTL = 10 * 60 * 1000;
   for (const [key, val] of expandableStore) {
     if (now - val.createdAt > TTL) expandableStore.delete(key);
   }
@@ -80,7 +81,6 @@ function makeStopButton(sessionId: string): ActionRowBuilder<ButtonBuilder> {
 function makeOptionButtons(sessionId: string, options: string[]): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   const maxOptions = Math.min(options.length, 10);
-
   for (let i = 0; i < maxOptions; i += 5) {
     const row = new ActionRowBuilder<ButtonBuilder>();
     const chunk = options.slice(i, i + 5);
@@ -94,16 +94,15 @@ function makeOptionButtons(sessionId: string, options: string[]): ActionRowBuild
     }
     rows.push(row);
   }
-
   return rows;
 }
 
 export function makeModeButtons(sessionId: string, currentMode: string): ActionRowBuilder<ButtonBuilder> {
   const modes = [
-    { id: 'auto', label: '\u26A1 Auto' },
-    { id: 'plan', label: '\uD83D\uDCCB Plan' },
-    { id: 'normal', label: '\uD83D\uDEE1\uFE0F Normal' },
-    { id: 'monitor', label: '\uD83E\uDDE0 Monitor' },
+    { id: 'auto', label: '⚡ Auto' },
+    { id: 'plan', label: '📋 Plan' },
+    { id: 'normal', label: '🛡️ Normal' },
+    { id: 'monitor', label: '🧠 Monitor' },
   ];
 
   const row = new ActionRowBuilder<ButtonBuilder>();
@@ -133,204 +132,39 @@ function makeYesNoButtons(sessionId: string): ActionRowBuilder<ButtonBuilder> {
 }
 
 function shouldSuppressCommandExecution(command: string): boolean {
-  const normalized = command.toLowerCase();
-  return normalized.includes('total-recall');
+  return command.toLowerCase().includes('total-recall');
 }
-
-/**
- * Serialized message editor — ensures only one Discord API call is in-flight
- * at a time, preventing duplicate messages from race conditions.
- */
-class MessageStreamer {
-  private channel: TextChannel;
-  private sessionId: string;
-  private currentMessage: Message | null = null;
-  private currentText = '';
-  private dirty = false;
-  private flushing = false;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private readonly INTERVAL = 400; // ms between edits
-
-  constructor(channel: TextChannel, sessionId: string) {
-    this.channel = channel;
-    this.sessionId = sessionId;
-  }
-
-  append(text: string): void {
-    this.currentText += text;
-    this.dirty = true;
-    this.scheduleFlush();
-  }
-
-  private scheduleFlush(): void {
-    if (this.timer || this.flushing) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.flush();
-    }, this.INTERVAL);
-  }
-
-  private async flush(): Promise<void> {
-    if (this.flushing || !this.dirty) return;
-    this.flushing = true;
-
-    try {
-      // Snapshot what we need to send
-      const text = this.currentText;
-      this.dirty = false;
-
-      const chunks = splitMessage(text);
-      const lastChunk = chunks[chunks.length - 1];
-
-      // If text overflows into multiple chunks, finalize earlier ones
-      if (chunks.length > 1 && this.currentMessage) {
-        try {
-          await this.currentMessage.edit({ content: chunks[0], components: [] });
-        } catch { /* deleted */ }
-        this.currentMessage = null;
-
-        for (let i = 1; i < chunks.length - 1; i++) {
-          await this.channel.send(chunks[i]);
-        }
-      }
-
-      // Edit or create the live message with the last chunk
-      if (this.currentMessage) {
-        try {
-          await this.currentMessage.edit({
-            content: lastChunk,
-            components: [makeStopButton(this.sessionId)],
-          });
-        } catch { /* deleted */ }
-      } else {
-        this.currentMessage = await this.channel.send({
-          content: lastChunk,
-          components: [makeStopButton(this.sessionId)],
-        });
-      }
-    } finally {
-      this.flushing = false;
-      // If more text arrived while we were flushing, schedule again
-      if (this.dirty) {
-        this.scheduleFlush();
-      }
-    }
-  }
-
-  /** Flush remaining text and remove the stop button */
-  async finalize(): Promise<void> {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-
-    // Wait for any in-flight flush to finish
-    while (this.flushing) {
-      await new Promise(r => setTimeout(r, 50));
-    }
-
-    // Do a final flush if there's pending text
-    if (this.dirty) {
-      this.dirty = false;
-      const text = this.currentText;
-      const chunks = splitMessage(text);
-      const lastChunk = chunks[chunks.length - 1];
-
-      if (chunks.length > 1 && this.currentMessage) {
-        try {
-          await this.currentMessage.edit({ content: chunks[0], components: [] });
-        } catch { /* deleted */ }
-        this.currentMessage = null;
-        for (let i = 1; i < chunks.length - 1; i++) {
-          await this.channel.send(chunks[i]);
-        }
-      }
-
-      if (this.currentMessage) {
-        try {
-          await this.currentMessage.edit({ content: lastChunk, components: [] });
-        } catch { /* deleted */ }
-      } else if (lastChunk) {
-        this.currentMessage = await this.channel.send({ content: lastChunk });
-      }
-    } else if (this.currentMessage) {
-      // Just remove the stop button
-      try {
-        await this.currentMessage.edit({
-          content: this.currentMessage.content || '',
-          components: [],
-        });
-      } catch { /* deleted */ }
-    }
-
-    this.currentMessage = null;
-    this.currentText = '';
-  }
-
-  /** Discard accumulated text and delete the live message if one exists */
-  async discard(): Promise<void> {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    while (this.flushing) {
-      await new Promise(r => setTimeout(r, 50));
-    }
-    if (this.currentMessage) {
-      try { await this.currentMessage.delete(); } catch { /* already deleted */ }
-      this.currentMessage = null;
-    }
-    this.currentText = '';
-    this.dirty = false;
-  }
-
-  getText(): string {
-    return this.currentText;
-  }
-
-  destroy(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-}
-
-// Task tool rendering helpers (for Claude's TaskCreate/TaskUpdate/TaskList/TaskGet)
 
 const STATUS_EMOJI: Record<string, string> = {
-  pending: '\u2B1C',       // white square
-  in_progress: '\uD83D\uDD04', // arrows
-  completed: '\u2705',     // check
-  deleted: '\uD83D\uDDD1\uFE0F',  // wastebasket
+  pending: '⬜',
+  in_progress: '🔄',
+  completed: '✅',
+  deleted: '🗑️',
 };
 
 function renderTaskToolEmbed(action: string, dataJson: string): EmbedBuilder | null {
   try {
     const data = JSON.parse(dataJson);
-
     if (action === 'TaskCreate') {
       const embed = new EmbedBuilder()
         .setColor(0x3498db)
-        .setTitle('\uD83D\uDCCB New Task')
+        .setTitle('📋 New Task')
         .setDescription(`**${data.subject || 'Untitled'}**`);
       if (data.description) {
         embed.addFields({ name: 'Details', value: truncate(data.description, 300) });
       }
       return embed;
     }
-
     if (action === 'TaskUpdate') {
-      const emoji = STATUS_EMOJI[data.status] || '\uD83D\uDCCB';
+      const emoji = STATUS_EMOJI[data.status] || '📋';
       const parts: string[] = [];
       if (data.status) parts.push(`${emoji} **${data.status}**`);
       if (data.subject) parts.push(data.subject);
       return new EmbedBuilder()
         .setColor(data.status === 'completed' ? 0x2ecc71 : 0xf39c12)
         .setTitle(`Task #${data.taskId || '?'} Updated`)
-        .setDescription(parts.join(' \u2014 ') || 'Updated');
+        .setDescription(parts.join(' — ') || 'Updated');
     }
-
     return null;
   } catch {
     return null;
@@ -339,15 +173,13 @@ function renderTaskToolEmbed(action: string, dataJson: string): EmbedBuilder | n
 
 function renderTaskListEmbed(resultText: string): EmbedBuilder | null {
   if (!resultText.trim()) return null;
-
   let formatted = resultText;
   for (const [status, emoji] of Object.entries(STATUS_EMOJI)) {
     formatted = formatted.replaceAll(status, `${emoji} ${status}`);
   }
-
   return new EmbedBuilder()
     .setColor(0x9b59b6)
-    .setTitle('\uD83D\uDCCB Task Board')
+    .setTitle('📋 Task Board')
     .setDescription(truncate(formatted, 4000));
 }
 
@@ -366,7 +198,6 @@ function renderAskUserQuestion(
     if (!questions?.length) return null;
 
     const isMulti = questions.length > 1;
-
     if (isMulti) {
       clearPendingAnswers(sessionId);
       questionCountStore.set(sessionId, questions.length);
@@ -374,7 +205,6 @@ function renderAskUserQuestion(
 
     const embeds: EmbedBuilder[] = [];
     const components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
-
     const btnPrefix = isMulti ? 'pick' : 'answer';
     const selectPrefix = isMulti ? 'pick-select' : 'answer-select';
 
@@ -410,13 +240,11 @@ function renderAskUserQuestion(
           }
           components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
         }
-
         const optionLines = q.options
-          .map(o => o.description ? `**${o.label}** \u2014 ${o.description}` : `**${o.label}**`)
+          .map(o => o.description ? `**${o.label}** — ${o.description}` : `**${o.label}**`)
           .join('\n');
         embed.addFields({ name: 'Options', value: truncate(optionLines, 1000) });
       }
-
       embeds.push(embed);
     }
 
@@ -437,9 +265,130 @@ function renderAskUserQuestion(
   }
 }
 
+/**
+ * Serialized message editor — ensures only one Discord API call is in-flight
+ * at a time, preventing duplicate messages from race conditions.
+ */
+class MessageStreamer {
+  private channel: SessionChannel;
+  private sessionId: string;
+  private currentMessage: Message | null = null;
+  private currentText = '';
+  private dirty = false;
+  private flushing = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly INTERVAL = 400;
+
+  constructor(channel: SessionChannel, sessionId: string) {
+    this.channel = channel;
+    this.sessionId = sessionId;
+  }
+
+  append(text: string): void {
+    this.currentText += text;
+    this.dirty = true;
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.timer || this.flushing) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flush();
+    }, this.INTERVAL);
+  }
+
+  private async flush(): Promise<void> {
+    if (this.flushing || !this.dirty) return;
+    this.flushing = true;
+    try {
+      const text = this.currentText;
+      this.dirty = false;
+      const chunks = splitMessage(text);
+      const lastChunk = chunks[chunks.length - 1];
+
+      if (chunks.length > 1 && this.currentMessage) {
+        try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
+        this.currentMessage = null;
+        for (let i = 1; i < chunks.length - 1; i++) {
+          await this.channel.send(chunks[i]);
+        }
+      }
+
+      if (this.currentMessage) {
+        try {
+          await this.currentMessage.edit({
+            content: lastChunk,
+            components: [makeStopButton(this.sessionId)],
+          });
+        } catch { /* deleted */ }
+      } else {
+        this.currentMessage = await this.channel.send({
+          content: lastChunk,
+          components: [makeStopButton(this.sessionId)],
+        });
+      }
+    } finally {
+      this.flushing = false;
+      if (this.dirty) this.scheduleFlush();
+    }
+  }
+
+  async finalize(): Promise<void> {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    while (this.flushing) { await new Promise(r => setTimeout(r, 50)); }
+
+    if (this.dirty) {
+      this.dirty = false;
+      const text = this.currentText;
+      const chunks = splitMessage(text);
+      const lastChunk = chunks[chunks.length - 1];
+
+      if (chunks.length > 1 && this.currentMessage) {
+        try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
+        this.currentMessage = null;
+        for (let i = 1; i < chunks.length - 1; i++) { await this.channel.send(chunks[i]); }
+      }
+
+      if (this.currentMessage) {
+        try { await this.currentMessage.edit({ content: lastChunk, components: [] }); } catch { /* deleted */ }
+      } else if (lastChunk) {
+        this.currentMessage = await this.channel.send({ content: lastChunk });
+      }
+    } else if (this.currentMessage) {
+      try {
+        await this.currentMessage.edit({
+          content: this.currentMessage.content || '',
+          components: [],
+        });
+      } catch { /* deleted */ }
+    }
+
+    this.currentMessage = null;
+    this.currentText = '';
+  }
+
+  async discard(): Promise<void> {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    while (this.flushing) { await new Promise(r => setTimeout(r, 50)); }
+    if (this.currentMessage) {
+      try { await this.currentMessage.delete(); } catch { /* already deleted */ }
+      this.currentMessage = null;
+    }
+    this.currentText = '';
+    this.dirty = false;
+  }
+
+  getText(): string { return this.currentText; }
+
+  destroy(): void {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+  }
+}
+
 export async function handleOutputStream(
   stream: AsyncGenerator<ProviderEvent>,
-  channel: TextChannel,
+  channel: SessionChannel,
   sessionId: string,
   verbose = false,
   mode = 'auto',
@@ -467,7 +416,6 @@ export async function handleOutputStream(
   const recentCommands: string[] = [];
   const changedFiles: string[] = [];
 
-  // Show "typing..." indicator while the agent is working
   channel.sendTyping().catch(() => {});
   const typingInterval = setInterval(() => {
     channel.sendTyping().catch(() => {});
@@ -485,7 +433,6 @@ export async function handleOutputStream(
         case 'ask_user': {
           askedUser = true;
           askUserQuestionsJson = event.questionsJson;
-          // Discard any streamed text before the question (Claude streams partial text before tool)
           await streamer.discard();
           const rendered = renderAskUserQuestion(event.questionsJson, sessionId);
           if (rendered) {
@@ -501,13 +448,57 @@ export async function handleOutputStream(
           if (!isTaskResult) {
             const taskEmbed = renderTaskToolEmbed(event.action, event.dataJson);
             if (taskEmbed) {
-              await channel.send({
-                embeds: [taskEmbed],
-                components: [makeStopButton(sessionId)],
-              });
+              await channel.send({ embeds: [taskEmbed], components: [makeStopButton(sessionId)] });
             }
           }
           lastToolName = event.action;
+          break;
+        }
+
+        case 'task_started': {
+          await streamer.finalize();
+          const embed = new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle(`🤖 Subagent started`)
+            .setDescription(truncate(event.description, 300));
+          await channel.send({ embeds: [embed] });
+          break;
+        }
+
+        case 'task_progress': {
+          // Silently track progress — only show if there's a summary
+          if (event.summary) {
+            await streamer.finalize();
+            const embed = new EmbedBuilder()
+              .setColor(0x8e44ad)
+              .setTitle(`🔄 Subagent progress`)
+              .setDescription(truncate(event.summary, 500));
+            if (event.lastToolName) embed.setFooter({ text: `Last: ${event.lastToolName}` });
+            await channel.send({ embeds: [embed] });
+          }
+          break;
+        }
+
+        case 'task_done': {
+          await streamer.finalize();
+          const statusEmoji = event.status === 'completed' ? '✅' : event.status === 'failed' ? '❌' : '⏹️';
+          const embed = new EmbedBuilder()
+            .setColor(event.status === 'completed' ? 0x2ecc71 : 0xe74c3c)
+            .setTitle(`${statusEmoji} Subagent ${event.status}`)
+            .setDescription(truncate(event.summary || 'No summary.', 500));
+          await channel.send({ embeds: [embed] });
+          break;
+        }
+
+        case 'web_search': {
+          if (verbose) {
+            await streamer.finalize();
+            const embed = new EmbedBuilder()
+              .setColor(0x1abc9c)
+              .setTitle(`🔍 Web search`)
+              .setDescription(`\`${truncate(event.query, 200)}\``);
+            await channel.send({ embeds: [embed] });
+          }
           break;
         }
 
@@ -517,14 +508,11 @@ export async function handleOutputStream(
             const displayInput = event.toolInput.length > 1000
               ? truncate(event.toolInput, 1000)
               : event.toolInput;
-
             const embed = new EmbedBuilder()
               .setColor(0x3498db)
               .setTitle(`Tool: ${event.toolName}`)
               .setDescription(`\`\`\`json\n${displayInput}\n\`\`\``);
-
             const components: ActionRowBuilder<ButtonBuilder>[] = [makeStopButton(sessionId)];
-
             if (event.toolInput.length > 1000) {
               const contentId = storeExpandable(event.toolInput);
               components.unshift(
@@ -536,7 +524,6 @@ export async function handleOutputStream(
                 ),
               );
             }
-
             await channel.send({ embeds: [embed], components });
           }
           lastToolName = event.toolName;
@@ -550,27 +537,20 @@ export async function handleOutputStream(
           if (!showResult) break;
 
           await streamer.finalize();
-
           if (isTaskResult && !verbose) {
             const boardEmbed = renderTaskListEmbed(event.result);
             if (boardEmbed) {
-              await channel.send({
-                embeds: [boardEmbed],
-                components: [makeStopButton(sessionId)],
-              });
+              await channel.send({ embeds: [boardEmbed], components: [makeStopButton(sessionId)] });
             }
           } else if (event.result) {
             const displayResult = event.result.length > 1000
               ? truncate(event.result, 1000)
               : event.result;
-
             const embed = new EmbedBuilder()
               .setColor(0x1abc9c)
               .setTitle('Tool Result')
               .setDescription(`\`\`\`\n${displayResult}\n\`\`\``);
-
             const components: ActionRowBuilder<ButtonBuilder>[] = [makeStopButton(sessionId)];
-
             if (event.result.length > 1000) {
               const contentId = storeExpandable(event.result);
               components.unshift(
@@ -582,7 +562,6 @@ export async function handleOutputStream(
                 ),
               );
             }
-
             await channel.send({ embeds: [embed], components });
           }
           break;
@@ -597,20 +576,13 @@ export async function handleOutputStream(
           break;
         }
 
-        // ── Codex-specific events ──
-
         case 'command_execution': {
           commandCount++;
-          if (recentCommands.length < 8) {
-            recentCommands.push(event.command);
-          }
+          if (recentCommands.length < 8) recentCommands.push(event.command);
           if (shouldSuppressCommandExecution(event.command)) break;
           await streamer.finalize();
           const embed = renderCommandExecutionEmbed(event);
-          await channel.send({
-            embeds: [embed],
-            components: [makeStopButton(sessionId)],
-          });
+          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
           break;
         }
 
@@ -624,10 +596,7 @@ export async function handleOutputStream(
           }
           await streamer.finalize();
           const embed = renderFileChangesEmbed(event);
-          await channel.send({
-            embeds: [embed],
-            components: [makeStopButton(sessionId)],
-          });
+          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
           break;
         }
 
@@ -635,10 +604,7 @@ export async function handleOutputStream(
           if (verbose) {
             await streamer.finalize();
             const embed = renderReasoningEmbed(event);
-            await channel.send({
-              embeds: [embed],
-              components: [makeStopButton(sessionId)],
-            });
+            await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
           }
           break;
         }
@@ -646,53 +612,36 @@ export async function handleOutputStream(
         case 'todo_list': {
           await streamer.finalize();
           const embed = renderCodexTodoListEmbed(event);
-          await channel.send({
-            embeds: [embed],
-            components: [makeStopButton(sessionId)],
-          });
+          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
           break;
         }
-
-        // ── Shared events ──
 
         case 'result': {
           success = event.success;
           const lastText = streamer.getText();
-
           const cost = event.costUsd.toFixed(4);
-          const duration = event.durationMs
-            ? `${(event.durationMs / 1000).toFixed(1)}s`
-            : 'unknown';
+          const duration = event.durationMs ? `${(event.durationMs / 1000).toFixed(1)}s` : 'unknown';
           const turns = event.numTurns || 0;
           const modeLabel = ({ auto: 'Auto', plan: 'Plan', normal: 'Normal', monitor: 'Monitor' } as Record<string, string>)[mode] || 'Auto';
-
           const statusLine = event.success
             ? `-# $${cost} | ${duration} | ${turns} turns | ${modeLabel}`
             : `-# Error | $${cost} | ${duration} | ${turns} turns`;
 
           streamer.append(`\n${statusLine}`);
-
           if (!event.success && event.errors.length) {
             streamer.append(`\n\`\`\`\n${event.errors.join('\n')}\n\`\`\``);
           }
-
-          // Don't auto-reset — transient errors shouldn't wipe session context.
-          // The provider's own retry logic handles recoverable failures.
-
           await streamer.finalize();
 
           const components: (ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>)[] = [];
-
           const checkText = lastText || '';
-          const options = detectNumberedOptions(checkText);
-          if (options) {
-            components.push(...makeOptionButtons(sessionId, options));
+          const opts = detectNumberedOptions(checkText);
+          if (opts) {
+            components.push(...makeOptionButtons(sessionId, opts));
           } else if (detectYesNoPrompt(checkText)) {
             components.push(makeYesNoButtons(sessionId));
           }
-
           components.push(makeModeButtons(sessionId, mode));
-
           await channel.send({ components });
           break;
         }
@@ -709,19 +658,7 @@ export async function handleOutputStream(
         }
 
         case 'session_init': {
-          // Keep provider session ID on channel topic so /session sync can recover Codex threads.
-          const session = getSession(sessionId);
-          const providerSessionId = event.providerSessionId || session?.providerSessionId;
-          if (providerSessionId) {
-            const currentTopic = channel.topic ?? '';
-            const topicBase = currentTopic
-              ? currentTopic.replace(/\s*\|\s*Provider Session:\s*[^\s|]+/i, '')
-              : `${session?.provider === 'codex' ? 'OpenAI Codex' : 'Claude Code'} session | Dir: ${session?.directory || 'unknown'}`;
-            const nextTopic = truncate(`${topicBase} | Provider Session: ${providerSessionId}`, 1024);
-            if (nextTopic !== currentTopic) {
-              await channel.setTopic(nextTopic).catch(() => {});
-            }
-          }
+          // Threads don't have topics; metadata is stored in session JSON only
           break;
         }
       }
@@ -729,7 +666,6 @@ export async function handleOutputStream(
   } catch (err: unknown) {
     hadError = true;
     await streamer.finalize();
-
     if (!isAbortError(err)) {
       const errMsg = (err as Error).message || '';
       const embed = new EmbedBuilder()

@@ -2,7 +2,7 @@ const command = process.argv[2];
 
 switch (command) {
   case 'setup': {
-    // Alias: agentcord setup → agentcord config setup
+    // Alias: threadcord setup → threadcord config setup
     const { handleConfig } = await import('./config-cli.ts');
     await handleConfig(['setup']);
     break;
@@ -15,7 +15,7 @@ switch (command) {
   case 'start':
   case undefined: {
     const { startBot } = await import('./bot.ts');
-    console.log('agentcord starting...');
+    console.log('threadcord starting...');
     await startBot();
     break;
   }
@@ -33,23 +33,25 @@ switch (command) {
   case '--help':
   case '-h': {
     console.log(`
-  \x1b[1magentcord\x1b[0m — Discord bot for managing Claude Code sessions
+  \x1b[1mthreadcord\x1b[0m — Discord bot for multi-agent coding sessions
 
   \x1b[1mUsage:\x1b[0m
-    agentcord                      Start the bot
-    agentcord config setup         Interactive configuration wizard
-    agentcord config get <key>     Read a config value
-    agentcord config set <k> <v>   Write a config value
-    agentcord config list          List all config values
-    agentcord config path          Show config file path
-    agentcord project <subcommand> Manage mounted projects
-    agentcord daemon               Manage background service (install/uninstall/status)
-    agentcord help                 Show this help message
+    threadcord                     Start the bot
+    threadcord config setup        Interactive configuration wizard
+    threadcord config get <key>    Read a config value
+    threadcord config set <k> <v>  Write a config value
+    threadcord config list         List all config values
+    threadcord config path         Show config file path
+    threadcord project <subcommand> Manage mounted projects
+    threadcord daemon              Manage background service (install/uninstall/status)
+    threadcord help                Show this help message
 
   \x1b[1mQuick start:\x1b[0m
-    1. agentcord config setup   Configure Discord app, token, permissions
-    2. agentcord                Start the bot
-    3. /session new <name>      Create a session in Discord
+    1. threadcord config setup      Configure Discord app, token, permissions
+    2. threadcord project init      Mount a local project
+    3. threadcord                   Start the bot
+    4. /project setup project:<name> Bind a Discord category to the mounted project
+    5. /agent spawn label:<task>    Create an agent session
 
   \x1b[2mhttps://github.com/xuhongbo/agentcord\x1b[0m
 `);
@@ -57,6 +59,6 @@ switch (command) {
   }
   default:
     console.error(`Unknown command: ${command}`);
-    console.error('Run \x1b[36magentcord help\x1b[0m for usage.');
+    console.error('Run \x1b[36mthreadcord help\x1b[0m for usage.');
     process.exit(1);
 }

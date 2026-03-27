@@ -1,6 +1,10 @@
 import Configstore from 'configstore';
 
-export const SENSITIVE_KEYS = new Set(['DISCORD_TOKEN']);
+export const SENSITIVE_KEYS = new Set([
+  'DISCORD_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'CODEX_API_KEY',
+]);
 
 export const VALID_KEYS = new Set([
   'DISCORD_TOKEN',
@@ -8,9 +12,21 @@ export const VALID_KEYS = new Set([
   'DISCORD_GUILD_ID',
   'ALLOWED_USERS',
   'ALLOW_ALL_USERS',
+  'DEFAULT_PROVIDER',
+  'DEFAULT_MODE',
+  'MAX_SUBAGENT_DEPTH',
+  'MAX_ACTIVE_SESSIONS',
+  'AUTO_ARCHIVE_DAYS',
   'CODEX_SANDBOX_MODE',
   'CODEX_APPROVAL_POLICY',
   'CODEX_NETWORK_ACCESS_ENABLED',
+  'CODEX_WEB_SEARCH',
+  'CODEX_REASONING_EFFORT',
+  'CODEX_PATH',
+  'CODEX_API_KEY',
+  'CODEX_BASE_URL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
   'MESSAGE_RETENTION_DAYS',
   'RATE_LIMIT_MS',
   'SHELL_ENABLED',
@@ -24,7 +40,7 @@ let store: Configstore | null = null;
 
 function getStore(): Configstore {
   if (!store) {
-    store = new Configstore('agentcord', {}, { globalConfigPath: true });
+    store = new Configstore('threadcord', {}, { globalConfigPath: true });
   }
   return store;
 }
@@ -70,6 +86,14 @@ export function validateConfigValue(key: string, value: string): string | null {
       }
       break;
     }
+    case 'MAX_SUBAGENT_DEPTH':
+    case 'MAX_ACTIVE_SESSIONS': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n <= 0) {
+        return `Invalid value for ${key}. Expected a positive integer`;
+      }
+      break;
+    }
     case 'MESSAGE_RETENTION_DAYS': {
       const n = Number(value);
       if (!Number.isInteger(n) || n <= 0) {
@@ -77,6 +101,33 @@ export function validateConfigValue(key: string, value: string): string | null {
       }
       break;
     }
+    case 'AUTO_ARCHIVE_DAYS': {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 0) {
+        return `Invalid value for AUTO_ARCHIVE_DAYS. Expected a non-negative integer`;
+      }
+      break;
+    }
+    case 'DEFAULT_PROVIDER':
+      if (!['claude', 'codex'].includes(value)) {
+        return `Invalid value for DEFAULT_PROVIDER. Expected one of: claude, codex`;
+      }
+      break;
+    case 'DEFAULT_MODE':
+      if (!['auto', 'plan', 'normal', 'monitor'].includes(value)) {
+        return `Invalid value for DEFAULT_MODE. Expected one of: auto, plan, normal, monitor`;
+      }
+      break;
+    case 'CODEX_WEB_SEARCH':
+      if (!['disabled', 'cached', 'live'].includes(value)) {
+        return `Invalid value for CODEX_WEB_SEARCH. Expected one of: disabled, cached, live`;
+      }
+      break;
+    case 'CODEX_REASONING_EFFORT':
+      if (!['', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(value)) {
+        return `Invalid value for CODEX_REASONING_EFFORT. Expected one of: minimal, low, medium, high, xhigh`;
+      }
+      break;
   }
   return null;
 }

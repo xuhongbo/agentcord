@@ -6,9 +6,12 @@ import {
   type ButtonInteraction,
   type StringSelectMenuInteraction,
   type TextChannel,
+  type AnyThreadChannel,
 } from 'discord.js';
+
+type SessionChannel = TextChannel | AnyThreadChannel;
 import { config } from './config.ts';
-import * as sessions from './session-manager.ts';
+import * as sessions from './thread-manager.ts';
 import {
   getExpandableContent,
   makeModeButtons,
@@ -51,10 +54,9 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       await interaction.reply({ content: 'Session is already generating.', ephemeral: true });
       return;
     }
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply('Continuing...');
       await executeSessionContinue(session, channel);
     } catch (err: unknown) {
@@ -71,7 +73,6 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       await interaction.reply({ content: 'Content expired.', ephemeral: true });
       return;
     }
-    // Discord max message is 2000 chars
     const display = truncate(content, 1950);
     await interaction.reply({ content: `\`\`\`\n${display}\n\`\`\``, ephemeral: true });
     return;
@@ -82,18 +83,15 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const parts = customId.split(':');
     const sessionId = parts[1];
     const optionIndex = parseInt(parts[2], 10);
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
-    // Send the option number as input
     const optionText = `${optionIndex + 1}`;
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Selected option ${optionIndex + 1}`);
       await executeSessionPrompt(session, channel, optionText);
     } catch (err: unknown) {
@@ -108,29 +106,23 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const sessionId = parts[1];
     const questionIndex = parseInt(parts[2], 10);
     const answer = parts.slice(3).join(':');
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     setPendingAnswer(sessionId, questionIndex, answer);
-
     const totalQuestions = getQuestionCount(sessionId);
     const pending = getPendingAnswers(sessionId);
     const answeredCount = pending?.size || 0;
 
-    // Update the original message to highlight the selected option
     try {
       const original = interaction.message;
       const updatedComponents = original.components.map((row: any) => {
         const firstComponent = row.components?.[0];
         if (!firstComponent?.customId?.startsWith('pick:')) return row;
-        // Check if this row belongs to the current question
         const rowQi = parseInt(firstComponent.customId.split(':')[2], 10);
         if (rowQi !== questionIndex) return row;
-
         const newRow = new ActionRowBuilder<ButtonBuilder>();
         for (const btn of row.components) {
           const btnAnswer = btn.customId.split(':').slice(3).join(':');
@@ -157,34 +149,26 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
   // Multi-question: submit all collected answers
   if (customId.startsWith('submit-answers:')) {
     const sessionId = customId.slice(15);
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     const totalQuestions = getQuestionCount(sessionId);
     const pending = getPendingAnswers(sessionId);
-
     if (!pending || pending.size === 0) {
-      await interaction.reply({ content: 'No answers selected yet. Pick an answer for each question first.', ephemeral: true });
+      await interaction.reply({ content: 'No answers selected yet.', ephemeral: true });
       return;
     }
-
-    // Build a formatted answer string
     const answerLines: string[] = [];
     for (let i = 0; i < totalQuestions; i++) {
-      const ans = pending.get(i);
-      answerLines.push(`Q${i + 1}: ${ans || '(no answer)'}`);
+      answerLines.push(`Q${i + 1}: ${pending.get(i) || '(no answer)'}`);
     }
     const combined = answerLines.join('\n');
-
     clearPendingAnswers(sessionId);
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Submitted answers:\n${combined}`);
       await executeSessionPrompt(session, channel, combined);
     } catch (err: unknown) {
@@ -193,23 +177,20 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     return;
   }
 
-  // AskUserQuestion answer buttons (single question — immediate submit)
+  // AskUserQuestion answer buttons (single question)
   if (customId.startsWith('answer:')) {
     const parts = customId.split(':');
     const sessionId = parts[1];
-    // Format: answer:sessionId:questionIndex:label (questionIndex is numeric)
     const hasQuestionIndex = /^\d+$/.test(parts[2]);
     const answer = hasQuestionIndex ? parts.slice(3).join(':') : parts.slice(2).join(':');
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: **${truncate(answer, 100)}**`);
       await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
@@ -222,17 +203,15 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
   if (customId.startsWith('confirm:')) {
     const parts = customId.split(':');
     const sessionId = parts[1];
-    const answer = parts[2]; // 'yes' or 'no'
-
+    const answer = parts[2];
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: ${answer}`);
       await executeSessionPrompt(session, channel, answer);
     } catch (err: unknown) {
@@ -246,28 +225,22 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const parts = customId.split(':');
     const sessionId = parts[1];
     const newMode = parts[2] as 'auto' | 'plan' | 'normal' | 'monitor';
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     sessions.setMode(sessionId, newMode);
-
     const labels: Record<string, string> = {
-      auto: '\u26A1 Auto — full autonomy',
-      plan: '\uD83D\uDCCB Plan — plans before changes',
-      normal: '\uD83D\uDEE1\uFE0F Normal — asks before destructive ops',
-      monitor: '\uD83E\uDDE0 Monitor — keeps steering toward completion',
+      auto: '⚡ Auto — full autonomy',
+      plan: '📋 Plan — plans before changes',
+      normal: '🛡️ Normal — asks before destructive ops',
+      monitor: '🧠 Monitor — keeps steering toward completion',
     };
-
     await interaction.reply({
       content: `Mode switched to **${labels[newMode]}**`,
       ephemeral: true,
     });
-
-    // Update the original message's mode buttons
     try {
       const original = interaction.message;
       const updatedComponents = original.components.map((row: any) => {
@@ -279,7 +252,6 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       });
       await original.edit({ components: updatedComponents as any });
     } catch { /* message may be deleted */ }
-
     return;
   }
 
@@ -294,33 +266,26 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
 
   const customId = interaction.customId;
 
-  // Multi-question: collect a select menu answer without submitting
   if (customId.startsWith('pick-select:')) {
-    // Format: pick-select:sessionId:questionIndex
     const parts = customId.split(':');
     const sessionId = parts[1];
     const questionIndex = parseInt(parts[2], 10);
     const selected = interaction.values[0];
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     setPendingAnswer(sessionId, questionIndex, selected);
-
     const totalQuestions = getQuestionCount(sessionId);
     const pending = getPendingAnswers(sessionId);
     const answeredCount = pending?.size || 0;
 
-    // Update the original message's select menu placeholder to show selection
     try {
       const original = interaction.message;
       const updatedComponents = original.components.map((row: any) => {
         const comp = row.components?.[0];
         if (comp?.customId !== customId) return row;
-        // Rebuild the select menu with updated placeholder
         const menu = new StringSelectMenuBuilder()
           .setCustomId(customId)
           .setPlaceholder(`Selected: ${selected.slice(0, 80)}`);
@@ -345,20 +310,17 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
   }
 
   if (customId.startsWith('answer-select:')) {
-    // Format: answer-select:sessionId or answer-select:sessionId:questionIndex
     const afterPrefix = customId.slice(14);
     const sessionId = afterPrefix.includes(':') ? afterPrefix.split(':')[0] : afterPrefix;
     const selected = interaction.values[0];
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: **${truncate(selected, 100)}**`);
       await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {
@@ -370,16 +332,14 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
   if (customId.startsWith('select:')) {
     const sessionId = customId.slice(7);
     const selected = interaction.values[0];
-
     const session = sessions.getSession(sessionId);
     if (!session) {
       await interaction.reply({ content: 'Session not found.', ephemeral: true });
       return;
     }
-
     await interaction.deferReply();
     try {
-      const channel = interaction.channel as TextChannel;
+      const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Selected: ${truncate(selected, 100)}`);
       await executeSessionPrompt(session, channel, selected);
     } catch (err: unknown) {
