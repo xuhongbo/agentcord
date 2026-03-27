@@ -33,6 +33,10 @@ export const VALID_KEYS = new Set([
   'SHELL_ENABLED',
   'SHELL_ALLOWED_USERS',
   'SESSION_SYNC_INTERVAL_MS',
+  'HEALTH_REPORT_ENABLED',
+  'HEALTH_REPORT_INTERVAL_MS',
+  'HEALTH_CHECK_STUCK_THRESHOLD_MS',
+  'HEALTH_CHECK_IDLE_THRESHOLD_MS',
 ]);
 
 const CODEX_SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
@@ -82,13 +86,21 @@ export function validateConfigValue(key: string, value: string): string | null {
       }
       break;
     case 'RATE_LIMIT_MS':
-    case 'SESSION_SYNC_INTERVAL_MS': {
+    case 'SESSION_SYNC_INTERVAL_MS':
+    case 'HEALTH_REPORT_INTERVAL_MS':
+    case 'HEALTH_CHECK_STUCK_THRESHOLD_MS':
+    case 'HEALTH_CHECK_IDLE_THRESHOLD_MS': {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 0) {
         return `Invalid value for ${key}. Expected a non-negative integer`;
       }
       break;
     }
+    case 'HEALTH_REPORT_ENABLED':
+      if (value !== 'true' && value !== 'false') {
+        return `Invalid value for HEALTH_REPORT_ENABLED. Expected "true" or "false"`;
+      }
+      break;
     case 'MAX_SUBAGENT_DEPTH':
     case 'MAX_ACTIVE_SESSIONS': {
       const n = Number(value);
