@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, globSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 export interface CodexIndexedSession {
   id: string;
@@ -14,6 +15,11 @@ export interface CodexDiscoveredSession {
   updatedAt?: number;
   cwd: string;
   projectPath: string;
+}
+
+interface SessionMetaRecord {
+  sessionId: string | null;
+  cwd: string | null;
 }
 
 export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIndexedSession[] {
@@ -38,18 +44,52 @@ export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIn
   return out;
 }
 
+function readSessionMetaRecord(file: string): SessionMetaRecord | null {
+  try {
+    const firstLine = readFileSync(file, 'utf-8').split('\n').find(Boolean);
+    if (!firstLine) return null;
+    const first = JSON.parse(firstLine);
+    if (first.type !== 'session_meta') return null;
+    const sessionId = typeof first.payload?.id === 'string'
+      ? first.payload.id
+      : typeof first.id === 'string'
+        ? first.id
+        : null;
+    const cwd = typeof first.payload?.cwd === 'string' ? first.payload.cwd : null;
+    return { sessionId, cwd };
+  } catch {
+    return null;
+  }
+}
+
+function fileMatchesSessionId(file: string, id: string): boolean {
+  const meta = readSessionMetaRecord(file);
+  return meta?.sessionId === id;
+}
+
 export function findSessionFileById(id: string, codexHome = join(homedir(), '.codex')): string | null {
   const sessionsDir = join(codexHome, 'sessions');
   if (!existsSync(sessionsDir)) return null;
 
+  try {
+    const result = execFileSync(
+      'rg',
+      ['-l', '--fixed-strings', `"${id}"`, sessionsDir],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    for (const file of result) {
+      if (fileMatchesSessionId(file, id)) return file;
+    }
+  } catch {
+    // fall back to slower in-process scan
+  }
+
   const files = globSync(join(sessionsDir, '**/*.jsonl'));
   for (const file of files) {
-    try {
-      const content = readFileSync(file, 'utf-8');
-      if (content.includes(id)) return file;
-    } catch {
-      // continue
-    }
+    if (fileMatchesSessionId(file, id)) return file;
   }
   return null;
 }
@@ -72,14 +112,10 @@ export function listCodexSessionsForProjects(
     try {
       const file = findSessionFileById(row.id, codexHome);
       if (!file) continue;
-      const firstLine = readFileSync(file, 'utf-8').split('\n').find(Boolean);
-      if (!firstLine) continue;
-      const first = JSON.parse(firstLine);
-      if (first.type !== 'session_meta') continue;
-      const cwd = first.payload?.cwd;
-      if (typeof cwd !== 'string' || !cwd) continue;
+      const meta = readSessionMetaRecord(file);
+      if (!meta || meta.sessionId !== row.id || !meta.cwd) continue;
 
-      const matches = normalizedProjects.filter(projectPath => isSubpathOfProject(cwd, projectPath));
+      const matches = normalizedProjects.filter(projectPath => isSubpathOfProject(meta.cwd, projectPath));
       if (matches.length === 0) continue;
       matches.sort((a, b) => b.length - a.length);
 
@@ -87,7 +123,7 @@ export function listCodexSessionsForProjects(
         id: row.id,
         threadName: row.threadName,
         updatedAt: row.updatedAt,
-        cwd: resolve(cwd),
+        cwd: resolve(meta.cwd),
         projectPath: matches[0],
       });
     } catch {

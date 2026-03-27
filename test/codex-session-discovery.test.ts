@@ -32,6 +32,29 @@ describe('codex-session-discovery', () => {
     expect(file).toContain('one.jsonl');
   });
 
+  it('does not false-match another file that merely references the session id in later content', () => {
+    const codexHome = mkdtempSync(join(tmpdir(), 'codex-home-'));
+    mkdirSync(join(codexHome, 'sessions', '2026', '03'), { recursive: true });
+    writeFileSync(
+      join(codexHome, 'session_index.jsonl'),
+      JSON.stringify({ id: 'target-session', thread_name: 'target', updated_at: 123 }),
+    );
+    writeFileSync(
+      join(codexHome, 'sessions', '2026', '03', 'wrong.jsonl'),
+      [
+        JSON.stringify({ type: 'session_meta', payload: { id: 'other-session', cwd: '/repo/other' } }),
+        JSON.stringify({ type: 'user', text: 'mentioning target-session in body' }),
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(codexHome, 'sessions', '2026', '03', 'right.jsonl'),
+      JSON.stringify({ type: 'session_meta', payload: { id: 'target-session', cwd: '/repo/right' } }),
+    );
+
+    const file = findSessionFileById('target-session', codexHome);
+    expect(file).toContain('right.jsonl');
+  });
+
   it('filters by mounted project path', () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'codex-home-'));
     mkdirSync(join(codexHome, 'sessions'), { recursive: true });

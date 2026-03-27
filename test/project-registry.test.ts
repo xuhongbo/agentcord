@@ -9,9 +9,12 @@ import {
   registerProject,
   getProjectByName,
   getProjectByPath,
+  getProjectByCategoryId,
   getAllRegisteredProjects,
   renameProject,
   removeProject,
+  bindProjectCategory,
+  setProjectHistoryChannel,
 } from '../src/project-registry.ts';
 
 describe('project-registry', () => {
@@ -42,5 +45,15 @@ describe('project-registry', () => {
 
     await removeProject('demo-renamed');
     expect(getAllRegisteredProjects()).toHaveLength(0);
+  });
+
+  it('binds a mounted project to a discord category and stores history channel', async () => {
+    await registerProject('demo', '/tmp/demo');
+    await bindProjectCategory('demo', 'cat-1', 'Demo Category');
+    await setProjectHistoryChannel('demo', 'forum-1');
+
+    expect(getProjectByCategoryId('cat-1')?.name).toBe('demo');
+    expect(getProjectByName('demo')?.discordCategoryName).toBe('Demo Category');
+    expect(getProjectByName('demo')?.historyChannelId).toBe('forum-1');
   });
 });

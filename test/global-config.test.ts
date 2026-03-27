@@ -42,7 +42,7 @@ const {
 
 beforeEach(async () => {
   // Replace store instance with a fresh one before each test
-  const fresh = new Configstore('agentcord', {}, { globalConfigPath: true });
+  const fresh = new Configstore('threadcord', {}, { globalConfigPath: true });
   _setStoreForTest(fresh);
 });
 
@@ -57,6 +57,11 @@ describe('VALID_KEYS and SENSITIVE_KEYS', () => {
   it('marks DISCORD_TOKEN as sensitive', () => {
     expect(SENSITIVE_KEYS.has('DISCORD_TOKEN')).toBe(true);
     expect(SENSITIVE_KEYS.has('DISCORD_CLIENT_ID')).toBe(false);
+  });
+
+  it('marks provider API keys as sensitive', () => {
+    expect(SENSITIVE_KEYS.has('ANTHROPIC_API_KEY')).toBe(true);
+    expect(SENSITIVE_KEYS.has('CODEX_API_KEY')).toBe(true);
   });
 });
 
@@ -104,6 +109,16 @@ describe('validateConfigValue', () => {
     expect(validateConfigValue('MESSAGE_RETENTION_DAYS', '7')).toBeNull();
     expect(validateConfigValue('MESSAGE_RETENTION_DAYS', '0')).not.toBeNull();
     expect(validateConfigValue('MESSAGE_RETENTION_DAYS', '-1')).not.toBeNull();
+  });
+
+  it('validates threadcord-specific config keys', () => {
+    expect(validateConfigValue('DEFAULT_PROVIDER', 'claude')).toBeNull();
+    expect(validateConfigValue('DEFAULT_MODE', 'monitor')).toBeNull();
+    expect(validateConfigValue('MAX_SUBAGENT_DEPTH', '3')).toBeNull();
+    expect(validateConfigValue('AUTO_ARCHIVE_DAYS', '0')).toBeNull();
+    expect(validateConfigValue('CODEX_WEB_SEARCH', 'live')).toBeNull();
+    expect(validateConfigValue('CODEX_REASONING_EFFORT', 'high')).toBeNull();
+    expect(validateConfigValue('DEFAULT_PROVIDER', 'gemini')).not.toBeNull();
   });
 });
 
