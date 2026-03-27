@@ -56,8 +56,8 @@ function generateMacPlist(workDir: string, logDir: string): string {
     <true/>
     <key>KeepAlive</key>
     <dict>
-        <key>SuccessfulExit</key>
-        <false/>
+        <key>Crashed</key>
+        <true/>
     </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>
@@ -86,7 +86,7 @@ After=network.target
 Type=simple
 ExecStart=${nodePath} --watch ${cliPath}
 WorkingDirectory=${workDir}
-Restart=on-failure
+Restart=on-abnormal
 RestartSec=10
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 

@@ -7,6 +7,8 @@ import {
   ChannelType,
   type TextChannel,
 } from 'discord.js';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { config } from './config.ts';
 import { registerCommands } from './commands.ts';
 import {
@@ -37,6 +39,49 @@ let client: Client;
 let logChannel: TextChannel | null = null;
 let logBuffer: string[] = [];
 let logTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ─── Process lock ─────────────────────────────────────────────────────────────
+
+const LOCK_FILE = join(config.dataDir, 'bot.lock');
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock(): boolean {
+  if (existsSync(LOCK_FILE)) {
+    try {
+      const pid = parseInt(readFileSync(LOCK_FILE, 'utf-8').trim(), 10);
+      if (!Number.isNaN(pid) && isProcessRunning(pid)) {
+        console.error(`[bot] Another instance is already running (PID ${pid}). Exiting.`);
+        return false;
+      }
+    } catch { /* stale lock file */ }
+    // Stale lock — remove it
+    try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+  }
+  writeFileSync(LOCK_FILE, process.pid.toString(), 'utf-8');
+  return true;
+}
+
+function releaseLock(): void {
+  try {
+    if (existsSync(LOCK_FILE)) {
+      const pid = parseInt(readFileSync(LOCK_FILE, 'utf-8').trim(), 10);
+      // Only delete if it's our lock
+      if (pid === process.pid) {
+        unlinkSync(LOCK_FILE);
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// ─── Logging ──────────────────────────────────────────────────────────────────
 
 function botLog(msg: string): void {
   const timestamp = new Date().toISOString().slice(11, 19);
@@ -98,6 +143,10 @@ async function cleanupOldMessages(): Promise<void> {
 }
 
 export async function startBot(): Promise<void> {
+  if (!acquireLock()) {
+    process.exit(1);
+  }
+
   client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -234,6 +283,7 @@ export async function startBot(): Promise<void> {
     botLog('Shutting down...');
     flushLogs();
     stopSync();
+    releaseLock();
     client.destroy();
     process.exit(0);
   };
