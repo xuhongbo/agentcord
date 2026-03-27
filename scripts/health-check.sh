@@ -1,6 +1,6 @@
 #!/bin/bash
 # agentcord 健康检查和自动重启脚本
-# 用途：检查 daemon 服务是否存活，如果挂了就自动重启
+# 用途：检查 daemon 服务是否存活，如果挂了就自动重启，重启失败则执行完整部署
 
 set -e
 
@@ -65,7 +65,73 @@ restart_service() {
         log "✅ Service restarted successfully"
         return 0
     else
-        log "❌ Service restart failed"
+        log "❌ Service restart failed, attempting full deployment..."
+        return 1
+    fi
+}
+
+# 完整部署流程（当简单重启失败时使用）
+full_deployment() {
+    log "🚀 Starting full deployment process..."
+
+    local project_dir="$HOME/Documents/github/agentcord"
+
+    # 检查项目目录是否存在
+    if [ ! -d "$project_dir" ]; then
+        log "❌ Project directory not found: $project_dir"
+        return 1
+    fi
+
+    cd "$project_dir" || {
+        log "❌ Failed to enter project directory"
+        return 1
+    }
+
+    # 1. 构建项目
+    log "📦 Building project..."
+    if ! pnpm build 2>&1 | tee -a "$LOG_FILE"; then
+        log "❌ Build failed"
+        return 1
+    fi
+
+    # 2. 创建安装包
+    log "📦 Creating package..."
+    if ! pnpm pack 2>&1 | tee -a "$LOG_FILE"; then
+        log "❌ Pack failed"
+        return 1
+    fi
+
+    # 3. 全局安装
+    log "📦 Installing globally..."
+    local tgz_file=$(ls threadcord-*.tgz 2>/dev/null | head -1)
+    if [ -z "$tgz_file" ]; then
+        log "❌ Package file not found"
+        return 1
+    fi
+
+    if ! pnpm install -g "$project_dir/$tgz_file" 2>&1 | tee -a "$LOG_FILE"; then
+        log "❌ Global install failed"
+        rm -f "$tgz_file"
+        return 1
+    fi
+
+    # 4. 清理安装包
+    rm -f "$tgz_file"
+
+    # 5. 重启 daemon
+    log "🔄 Restarting daemon..."
+    threadcord daemon uninstall 2>&1 | tee -a "$LOG_FILE"
+    rm -f "$HOME/.threadcord/bot.lock"
+    threadcord daemon install 2>&1 | tee -a "$LOG_FILE"
+
+    # 6. 等待并验证
+    sleep 5
+
+    if check_daemon && check_bot_alive; then
+        log "✅ Full deployment completed successfully"
+        return 0
+    else
+        log "❌ Full deployment failed"
         return 1
     fi
 }
@@ -80,11 +146,23 @@ main() {
             exit 0
         else
             log "⚠️  Daemon running but bot process is dead"
-            restart_service
+            if restart_service; then
+                exit 0
+            else
+                log "⚠️  Simple restart failed, trying full deployment..."
+                full_deployment
+                exit $?
+            fi
         fi
     else
         log "⚠️  Daemon is not running"
-        restart_service
+        if restart_service; then
+            exit 0
+        else
+            log "⚠️  Simple restart failed, trying full deployment..."
+            full_deployment
+            exit $?
+        fi
     fi
 
     log "=== Health Check Completed ==="
