@@ -118,18 +118,27 @@ export function makeModeButtons(sessionId: string, currentMode: string, claudePe
   }
 
   // Add Claude permission mode indicator if applicable
-  if (claudePermissionMode) {
-    const permLabel = claudePermissionMode === 'bypass' ? '⚡ 绕过权限' : '🛡️ 需要确认';
+  const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(currentMode, claudePermissionMode);
+  if (effectiveClaudePermissionMode) {
+    const permLabel = effectiveClaudePermissionMode === 'bypass' ? '⚡ 绕过权限' : '🛡️ 需要确认';
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`perm-info:${sessionId}`)
         .setLabel(permLabel)
-        .setStyle(claudePermissionMode === 'bypass' ? ButtonStyle.Danger : ButtonStyle.Success)
+        .setStyle(effectiveClaudePermissionMode === 'bypass' ? ButtonStyle.Danger : ButtonStyle.Success)
         .setDisabled(true),
     );
   }
 
   return row;
+}
+
+export function resolveEffectiveClaudePermissionMode(
+  currentMode: string,
+  claudePermissionMode?: 'bypass' | 'normal',
+): 'bypass' | 'normal' | undefined {
+  if (!claudePermissionMode) return undefined;
+  return currentMode === 'auto' ? 'bypass' : claudePermissionMode;
 }
 
 function makeYesNoButtons(sessionId: string): ActionRowBuilder<ButtonBuilder> {

@@ -14,7 +14,7 @@ import * as projectMgr from './project-manager.ts';
 import { spawnSubagent, getSubagents } from './subagent-manager.ts';
 import { archiveSession } from './archive-manager.ts';
 import { executeSessionPrompt, executeSessionContinue } from './session-executor.ts';
-import { makeModeButtons } from './output-handler.ts';
+import { makeModeButtons, resolveEffectiveClaudePermissionMode } from './output-handler.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import { isUserAllowed, resolvePath, formatUptime, formatRelative } from './utils.ts';
 import type { ProviderName, SessionMode } from './types.ts';
@@ -439,7 +439,8 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     );
 
   if (provider === 'claude' && session.claudePermissionMode) {
-    const permLabel = session.claudePermissionMode === 'bypass'
+    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(mode, session.claudePermissionMode);
+    const permLabel = effectiveClaudePermissionMode === 'bypass'
       ? '⚡ 绕过权限（完全自主）'
       : '🛡️ 普通权限（需要确认）';
     welcomeEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
@@ -462,7 +463,8 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     );
 
   if (provider === 'claude' && session.claudePermissionMode) {
-    const permLabel = session.claudePermissionMode === 'bypass'
+    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(mode, session.claudePermissionMode);
+    const permLabel = effectiveClaudePermissionMode === 'bypass'
       ? '⚡ 绕过权限（完全自主）'
       : '🛡️ 普通权限（需要确认）';
     embed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });

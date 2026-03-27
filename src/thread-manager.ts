@@ -452,16 +452,18 @@ function buildProviderOptions(
   controller: AbortController,
   isMonitor = false,
 ): import('./providers/types.ts').ProviderSessionOptions {
+  const isAutoMode = session.mode === 'auto';
+
   return {
     directory: session.directory,
     providerSessionId: isMonitor ? session.monitorProviderSessionId : session.providerSessionId,
     model: session.model,
     sandboxMode: config.codexSandboxMode,
-    approvalPolicy: config.codexApprovalPolicy,
+    approvalPolicy: isAutoMode ? 'never' : config.codexApprovalPolicy,
     networkAccessEnabled: config.codexNetworkAccessEnabled,
     webSearchMode: config.codexWebSearchMode,
     modelReasoningEffort: config.codexReasoningEffort || undefined,
-    claudePermissionMode: session.claudePermissionMode ?? config.claudePermissionMode,
+    claudePermissionMode: isAutoMode ? 'bypass' : (session.claudePermissionMode ?? config.claudePermissionMode),
     systemPromptParts: isMonitor ? buildMonitorSystemPromptParts(session) : buildSystemPromptParts(session),
     abortController: controller,
   };
