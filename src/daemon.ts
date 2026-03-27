@@ -24,9 +24,22 @@ function getCliPath(): string {
   try {
     const result = execSync('which threadcord', { encoding: 'utf-8' }).trim();
     if (result) {
-      // Resolve symlink to get the real path
+      // pnpm creates a shell wrapper — parse it to find the real JS file
+      try {
+        const wrapper = execSync(`cat "${result}"`, { encoding: 'utf-8' });
+        const match = wrapper.match(/exec\s+(?:\S+\s+)?"?([^"$\s]+cli\.js)"?\s/);
+        if (match) {
+          // Resolve relative paths against the wrapper's directory
+          const wrapperDir = execSync(`dirname "${result}"`, { encoding: 'utf-8' }).trim();
+          const resolved = resolve(wrapperDir, match[1]);
+          if (existsSync(resolved)) return resolved;
+        }
+      } catch { /* not a shell wrapper */ }
+
+      // Try resolving as symlink
       const realPath = execSync(`readlink -f "${result}" 2>/dev/null || realpath "${result}" 2>/dev/null || echo "${result}"`, { encoding: 'utf-8' }).trim();
-      return realPath;
+      // If it resolved to a .js file, use it directly
+      if (realPath.endsWith('.js') && existsSync(realPath)) return realPath;
     }
   } catch { /* ignore */ }
 
