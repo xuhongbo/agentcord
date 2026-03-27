@@ -794,7 +794,7 @@ export async function executeSessionPrompt(
   }
 
   const goalText = extractPromptText(prompt);
-  if (options.updateMonitorGoal && goalText && !session.monitorGoal) {
+  if ((options.updateMonitorGoal ?? true) && goalText && !session.monitorGoal) {
     sessions.setMonitorGoal(session.id, goalText);
     session = sessions.getSession(session.id) ?? session;
   }

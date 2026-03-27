@@ -13,6 +13,8 @@ export type ThreadType = SessionType;
 //   'persistent' → lives in a TextChannel under the project Category
 //   'subagent'   → lives in a Thread under the parent session's TextChannel
 
+export type ClaudePermissionMode = 'bypass' | 'normal';
+
 export interface ThreadSession {
   id: string;                    // Internal session ID (sanitized agentLabel + dedup suffix)
   channelId: string;             // Primary Discord ID: TextChannel.id for persistent, Thread.id for subagent
@@ -29,6 +31,7 @@ export interface ThreadSession {
   mode: SessionMode;
   agentPersona?: string;         // Agent persona name
   verbose: boolean;              // Show tool calls in Discord
+  claudePermissionMode?: ClaudePermissionMode;  // Claude-specific permission mode
   monitorGoal?: string;
   monitorProviderSessionId?: string;
   workflowState: SessionWorkflowState;

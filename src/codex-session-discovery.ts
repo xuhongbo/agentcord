@@ -114,8 +114,9 @@ export function listCodexSessionsForProjects(
       if (!file) continue;
       const meta = readSessionMetaRecord(file);
       if (!meta || meta.sessionId !== row.id || !meta.cwd) continue;
+      const cwd = meta.cwd;
 
-      const matches = normalizedProjects.filter(projectPath => isSubpathOfProject(meta.cwd, projectPath));
+      const matches = normalizedProjects.filter(projectPath => isSubpathOfProject(cwd, projectPath));
       if (matches.length === 0) continue;
       matches.sort((a, b) => b.length - a.length);
 
@@ -123,7 +124,7 @@ export function listCodexSessionsForProjects(
         id: row.id,
         threadName: row.threadName,
         updatedAt: row.updatedAt,
-        cwd: resolve(meta.cwd),
+        cwd: resolve(cwd),
         projectPath: matches[0],
       });
     } catch {

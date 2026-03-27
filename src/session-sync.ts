@@ -143,7 +143,7 @@ async function runSync(client: Client): Promise<void> {
         guild,
         category,
         project.name,
-        project.path,
+        session.cwd,
         'codex',
         session.id,
         session.threadName,

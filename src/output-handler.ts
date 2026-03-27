@@ -274,6 +274,7 @@ class MessageStreamer {
   private sessionId: string;
   private currentMessage: Message | null = null;
   private currentText = '';
+  private transcriptText = '';
   private dirty = false;
   private flushing = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -284,8 +285,11 @@ class MessageStreamer {
     this.sessionId = sessionId;
   }
 
-  append(text: string): void {
+  append(text: string, options: { persist?: boolean } = {}): void {
     this.currentText += text;
+    if (options.persist !== false) {
+      this.transcriptText += text;
+    }
     this.dirty = true;
     this.scheduleFlush();
   }
@@ -307,11 +311,17 @@ class MessageStreamer {
       const chunks = splitMessage(text);
       const lastChunk = chunks[chunks.length - 1];
 
-      if (chunks.length > 1 && this.currentMessage) {
-        try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
-        this.currentMessage = null;
-        for (let i = 1; i < chunks.length - 1; i++) {
-          await this.channel.send(chunks[i]);
+      if (chunks.length > 1) {
+        if (this.currentMessage) {
+          try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
+          this.currentMessage = null;
+          for (let i = 1; i < chunks.length - 1; i++) {
+            await this.channel.send(chunks[i]);
+          }
+        } else {
+          for (let i = 0; i < chunks.length - 1; i++) {
+            await this.channel.send(chunks[i]);
+          }
         }
       }
 
@@ -348,6 +358,10 @@ class MessageStreamer {
         try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
         this.currentMessage = null;
         for (let i = 1; i < chunks.length - 1; i++) { await this.channel.send(chunks[i]); }
+      } else if (chunks.length > 1) {
+        for (let i = 0; i < chunks.length - 1; i++) {
+          await this.channel.send(chunks[i]);
+        }
       }
 
       if (this.currentMessage) {
@@ -379,7 +393,7 @@ class MessageStreamer {
     this.dirty = false;
   }
 
-  getText(): string { return this.currentText; }
+  getText(): string { return this.transcriptText; }
 
   destroy(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
@@ -627,9 +641,9 @@ export async function handleOutputStream(
             ? `-# $${cost} | ${duration} | ${turns} turns | ${modeLabel}`
             : `-# Error | $${cost} | ${duration} | ${turns} turns`;
 
-          streamer.append(`\n${statusLine}`);
+          streamer.append(`\n${statusLine}`, { persist: false });
           if (!event.success && event.errors.length) {
-            streamer.append(`\n\`\`\`\n${event.errors.join('\n')}\n\`\`\``);
+            streamer.append(`\n\`\`\`\n${event.errors.join('\n')}\n\`\`\``, { persist: false });
           }
           await streamer.finalize();
 
