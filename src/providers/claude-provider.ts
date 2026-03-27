@@ -1,7 +1,5 @@
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
-} from './types.ts';
+import type { Provider, ProviderEvent, ProviderSessionOptions, ContentBlock } from './types.ts';
 
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp']);
@@ -11,11 +9,16 @@ function extractImagePath(toolName: string, toolInput: string): string | null {
     const data = JSON.parse(toolInput);
     if (toolName === 'Write' || toolName === 'Read') {
       const filePath: string = data.file_path;
-      if (filePath && IMAGE_EXTENSIONS.has(filePath.slice(filePath.lastIndexOf('.')).toLowerCase())) {
+      if (
+        filePath &&
+        IMAGE_EXTENSIONS.has(filePath.slice(filePath.lastIndexOf('.')).toLowerCase())
+      ) {
         return filePath;
       }
     }
-  } catch { /* incomplete or invalid JSON */ }
+  } catch {
+    /* incomplete or invalid JSON */
+  }
   return null;
 }
 
@@ -33,8 +36,11 @@ export class ClaudeProvider implements Provider {
 
   supports(feature: string): boolean {
     return [
-      'resume_from_terminal', 'plugins',
-      'ask_user_question', 'mode_switching', 'continue',
+      'resume_from_terminal',
+      'plugins',
+      'ask_user_question',
+      'mode_switching',
+      'continue',
     ].includes(feature);
   }
 
@@ -48,14 +54,16 @@ export class ClaudeProvider implements Provider {
     function buildQueryPrompt(): string | AsyncIterable<any> {
       if (typeof prompt === 'string') return prompt;
       // Filter out LocalImageBlock (not supported by Claude directly)
-      const claudeBlocks = (prompt as ContentBlock[]).filter(b => b.type !== 'local_image');
+      const claudeBlocks = (prompt as ContentBlock[]).filter((b) => b.type !== 'local_image');
       const userMessage = {
         type: 'user' as const,
         message: { role: 'user' as const, content: claudeBlocks },
         parent_tool_use_id: null,
         session_id: '',
       };
-      return (async function* () { yield userMessage; })();
+      return (async function* () {
+        yield userMessage;
+      })();
     }
 
     let retried = false;
@@ -95,9 +103,7 @@ export class ClaudeProvider implements Provider {
     }
   }
 
-  async *continueSession(
-    options: ProviderSessionOptions,
-  ): AsyncGenerator<ProviderEvent> {
+  async *continueSession(options: ProviderSessionOptions): AsyncGenerator<ProviderEvent> {
     const systemPrompt = buildClaudeSystemPrompt(options.systemPromptParts);
     const isBypass = options.claudePermissionMode === 'bypass';
 
@@ -201,7 +207,7 @@ export class ClaudeProvider implements Provider {
       if (message.type === 'user') {
         const content = (message as any).message?.content;
         let resultText = '';
-        let toolName = '';
+        const toolName = '';
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_result' && block.content) {

@@ -137,7 +137,9 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         return newRow;
       });
       await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+    } catch {
+      /* message may be deleted */
+    }
 
     await interaction.reply({
       content: `Selected for Q${questionIndex + 1}: **${truncate(answer, 100)}** (${answeredCount}/${totalQuestions} answered)`,
@@ -252,7 +254,9 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         return row;
       });
       await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+    } catch {
+      /* message may be deleted */
+    }
     return;
   }
 
@@ -301,7 +305,9 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
         return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
       });
       await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+    } catch {
+      /* message may be deleted */
+    }
 
     await interaction.reply({
       content: `Selected for Q${questionIndex + 1}: **${truncate(selected, 100)}** (${answeredCount}/${totalQuestions} answered)`,

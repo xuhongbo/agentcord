@@ -18,7 +18,21 @@ type SessionChannel = TextChannel | AnyThreadChannel;
 const lastMessageTime = new Map<string, number>();
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
-const TEXT_EXTS = new Set(['.txt', '.md', '.log', '.json', '.ts', '.js', '.py', '.sh', '.yaml', '.yml', '.toml', '.env', '.csv']);
+const TEXT_EXTS = new Set([
+  '.txt',
+  '.md',
+  '.log',
+  '.json',
+  '.ts',
+  '.js',
+  '.py',
+  '.sh',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.env',
+  '.csv',
+]);
 const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024; // 5MB
 
 async function fetchAttachment(url: string): Promise<Buffer> {
@@ -34,10 +48,15 @@ function getExtension(filename: string): string {
 
 function mimeToMediaType(ext: string): ImageMediaType {
   switch (ext) {
-    case '.jpg': case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    default: return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    default:
+      return 'image/png';
   }
 }
 
@@ -84,7 +103,9 @@ export async function handleMessage(message: Message): Promise<void> {
 
   // Authorization
   if (!isUserAllowed(message.author.id, config.allowedUsers, config.allowAllUsers)) {
-    await (channel as SessionChannel).send('You are not authorized to use this bot.').catch(() => {});
+    await (channel as SessionChannel)
+      .send('You are not authorized to use this bot.')
+      .catch(() => {});
     return;
   }
 
@@ -99,7 +120,9 @@ export async function handleMessage(message: Message): Promise<void> {
 
   // Guard: already generating
   if (session.isGenerating) {
-    await (channel as SessionChannel).send('*Agent is already generating. Stop it first with `/agent stop`.*').catch(() => {});
+    await (channel as SessionChannel)
+      .send('*Agent is already generating. Stop it first with `/agent stop`.*')
+      .catch(() => {});
     return;
   }
 
@@ -140,18 +163,26 @@ export async function handleMessage(message: Message): Promise<void> {
     // Ignore reaction errors (missing permissions, etc.)
   }
 
-  await executeSessionPrompt(session, channel as SessionChannel, blocks.length === 1 && blocks[0].type === 'text'
-    ? (blocks[0] as { type: 'text'; text: string }).text
-    : blocks);
+  await executeSessionPrompt(
+    session,
+    channel as SessionChannel,
+    blocks.length === 1 && blocks[0].type === 'text'
+      ? (blocks[0] as { type: 'text'; text: string }).text
+      : blocks,
+  );
 
   // After a subagent finishes, notify the parent session channel
   if (session.type === 'subagent' && session.parentChannelId && message.guild) {
-    const parentChannel = message.guild.channels.cache.get(session.parentChannelId) as TextChannel | undefined;
+    const parentChannel = message.guild.channels.cache.get(session.parentChannelId) as
+      | TextChannel
+      | undefined;
     if (parentChannel?.isTextBased() && !parentChannel.isThread()) {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle(`✅ Subagent Finished: ${session.agentLabel}`)
-        .setDescription(`<#${session.channelId}> has completed a pass. Review the thread for output.`);
+        .setDescription(
+          `<#${session.channelId}> has completed a pass. Review the thread for output.`,
+        );
       await parentChannel.send({ embeds: [embed] }).catch(() => {});
     }
   }

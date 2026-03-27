@@ -42,13 +42,19 @@ describe('codex-session-discovery', () => {
     writeFileSync(
       join(codexHome, 'sessions', '2026', '03', 'wrong.jsonl'),
       [
-        JSON.stringify({ type: 'session_meta', payload: { id: 'other-session', cwd: '/repo/other' } }),
+        JSON.stringify({
+          type: 'session_meta',
+          payload: { id: 'other-session', cwd: '/repo/other' },
+        }),
         JSON.stringify({ type: 'user', text: 'mentioning target-session in body' }),
       ].join('\n'),
     );
     writeFileSync(
       join(codexHome, 'sessions', '2026', '03', 'right.jsonl'),
-      JSON.stringify({ type: 'session_meta', payload: { id: 'target-session', cwd: '/repo/right' } }),
+      JSON.stringify({
+        type: 'session_meta',
+        payload: { id: 'target-session', cwd: '/repo/right' },
+      }),
     );
 
     const file = findSessionFileById('target-session', codexHome);
@@ -65,10 +71,17 @@ describe('codex-session-discovery', () => {
     );
     writeFileSync(
       join(codexHome, 'sessions', 's.jsonl'),
-      JSON.stringify({ type: 'session_meta', payload: { cwd: '/work/project-a/sub' }, id: 'sid-1' }),
+      JSON.stringify({
+        type: 'session_meta',
+        payload: { cwd: '/work/project-a/sub' },
+        id: 'sid-1',
+      }),
     );
 
-    const sessions = listCodexSessionsForProjects(['/work/project-a', '/work/project-b'], codexHome);
+    const sessions = listCodexSessionsForProjects(
+      ['/work/project-a', '/work/project-b'],
+      codexHome,
+    );
     expect(sessions).toHaveLength(1);
     expect(sessions[0].projectPath).toBe('/work/project-a');
   });

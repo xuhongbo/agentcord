@@ -47,7 +47,8 @@ export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIn
       if (!json.id || typeof json.id !== 'string') continue;
       out.push({
         id: json.id,
-        threadName: typeof json.thread_name === 'string' && json.thread_name ? json.thread_name : json.id,
+        threadName:
+          typeof json.thread_name === 'string' && json.thread_name ? json.thread_name : json.id,
         updatedAt: typeof json.updated_at === 'number' ? json.updated_at : undefined,
       });
     } catch {
@@ -63,11 +64,12 @@ function readSessionMetaRecord(file: string): SessionMetaRecord | null {
     if (!firstLine) return null;
     const first = JSON.parse(firstLine);
     if (first.type !== 'session_meta') return null;
-    const sessionId = typeof first.payload?.id === 'string'
-      ? first.payload.id
-      : typeof first.id === 'string'
-        ? first.id
-        : null;
+    const sessionId =
+      typeof first.payload?.id === 'string'
+        ? first.payload.id
+        : typeof first.id === 'string'
+          ? first.id
+          : null;
     const cwd = typeof first.payload?.cwd === 'string' ? first.payload.cwd : null;
     return { sessionId, cwd };
   } catch {
@@ -80,18 +82,20 @@ function fileMatchesSessionId(file: string, id: string): boolean {
   return meta?.sessionId === id;
 }
 
-export function findSessionFileById(id: string, codexHome = join(homedir(), '.codex')): string | null {
+export function findSessionFileById(
+  id: string,
+  codexHome = join(homedir(), '.codex'),
+): string | null {
   const sessionsDir = join(codexHome, 'sessions');
   if (!existsSync(sessionsDir)) return null;
 
   // Only try ripgrep if it's available
   if (isRipgrepAvailable()) {
     try {
-      const result = execFileSync(
-        'rg',
-        ['-l', '--fixed-strings', `"${id}"`, sessionsDir],
-        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-      )
+      const result = execFileSync('rg', ['-l', '--fixed-strings', `"${id}"`, sessionsDir], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
         .trim()
         .split('\n')
         .filter(Boolean);
@@ -113,7 +117,9 @@ export function findSessionFileById(id: string, codexHome = join(homedir(), '.co
 export function isSubpathOfProject(cwd: string, projectPath: string): boolean {
   const normalizedCwd = resolve(cwd);
   const normalizedProject = resolve(projectPath);
-  return normalizedCwd === normalizedProject || normalizedCwd.startsWith(`${normalizedProject}${sep}`);
+  return (
+    normalizedCwd === normalizedProject || normalizedCwd.startsWith(`${normalizedProject}${sep}`)
+  );
 }
 
 export function listCodexSessionsForProjects(
@@ -121,7 +127,7 @@ export function listCodexSessionsForProjects(
   codexHome = join(homedir(), '.codex'),
 ): CodexDiscoveredSession[] {
   const indexed = readSessionIndex(codexHome);
-  const normalizedProjects = projectPaths.map(p => resolve(p));
+  const normalizedProjects = projectPaths.map((p) => resolve(p));
   const out: CodexDiscoveredSession[] = [];
 
   for (const row of indexed) {
@@ -132,7 +138,9 @@ export function listCodexSessionsForProjects(
       if (!meta || meta.sessionId !== row.id || !meta.cwd) continue;
       const cwd = meta.cwd;
 
-      const matches = normalizedProjects.filter(projectPath => isSubpathOfProject(cwd, projectPath));
+      const matches = normalizedProjects.filter((projectPath) =>
+        isSubpathOfProject(cwd, projectPath),
+      );
       if (matches.length === 0) continue;
       matches.sort((a, b) => b.length - a.length);
 

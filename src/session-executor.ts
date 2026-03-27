@@ -37,34 +37,53 @@ interface AskUserDecision {
 type WorkerPassResult = Awaited<ReturnType<typeof runWorkerPass>>;
 type WorkerProgressReport = SessionWorkerProgressReport;
 
-function deriveRequiredArtifacts(missingEvidence: string[], workerReport?: WorkerProgressReport): string[] {
-  const fromMissing = missingEvidence
-    .filter(item => /\b(file|artifact|report|rubric|spec|scenario|benchmark)\b/i.test(item));
+function deriveRequiredArtifacts(
+  missingEvidence: string[],
+  workerReport?: WorkerProgressReport,
+): string[] {
+  const fromMissing = missingEvidence.filter((item) =>
+    /\b(file|artifact|report|rubric|spec|scenario|benchmark)\b/i.test(item),
+  );
   const artifactHints = workerReport?.artifacts ?? [];
   return [...new Set([...fromMissing, ...artifactHints])].slice(0, 6);
 }
 
-function deriveRequiredValidation(requiredNextProof: string[], workerReport?: WorkerProgressReport): string[] {
-  const fromProof = requiredNextProof
-    .filter(item => /\b(test|validate|validation|benchmark|grader|check|prove|metric)\b/i.test(item));
+function deriveRequiredValidation(
+  requiredNextProof: string[],
+  workerReport?: WorkerProgressReport,
+): string[] {
+  const fromProof = requiredNextProof.filter((item) =>
+    /\b(test|validate|validation|benchmark|grader|check|prove|metric)\b/i.test(item),
+  );
   const validations = workerReport?.validationCommands ?? [];
   return [...new Set([...fromProof, ...validations])].slice(0, 6);
 }
 
 function buildNextProofContract(
   goal: string,
-  decision: Pick<MonitorDecision, 'acceptedEvidence' | 'missingEvidence' | 'requiredNextProof' | 'disallowedDrift' | 'status' | 'completionSummary' | 'rationale'>,
+  decision: Pick<
+    MonitorDecision,
+    | 'acceptedEvidence'
+    | 'missingEvidence'
+    | 'requiredNextProof'
+    | 'disallowedDrift'
+    | 'status'
+    | 'completionSummary'
+    | 'rationale'
+  >,
   workerReport?: WorkerProgressReport,
 ): SessionNextProofContract | undefined {
   if (decision.status !== 'continue') return undefined;
 
-  const requiredNextProof = decision.requiredNextProof.length > 0
-    ? decision.requiredNextProof
-    : ['Produce concrete evidence that the original request is complete.'];
+  const requiredNextProof =
+    decision.requiredNextProof.length > 0
+      ? decision.requiredNextProof
+      : ['Produce concrete evidence that the original request is complete.'];
 
-  const missingEvidence = decision.missingEvidence.length > 0
-    ? decision.missingEvidence
-    : ['Concrete completion evidence tied to the original request.'];
+  const missingEvidence =
+    decision.missingEvidence.length > 0
+      ? decision.missingEvidence
+      : ['Concrete completion evidence tied to the original request.'];
 
   return {
     goal,
@@ -73,7 +92,10 @@ function buildNextProofContract(
     requiredNextProof,
     requiredArtifacts: deriveRequiredArtifacts(missingEvidence, workerReport),
     requiredValidation: deriveRequiredValidation(requiredNextProof, workerReport),
-    stopCondition: decision.completionSummary || decision.rationale || 'Stop only once the missing proof is explicitly present.',
+    stopCondition:
+      decision.completionSummary ||
+      decision.rationale ||
+      'Stop only once the missing proof is explicitly present.',
     avoidUntilProved: decision.disallowedDrift,
   };
 }
@@ -87,7 +109,7 @@ function applyWorkflowHook(
   hook: Session['workflowState']['lastHook'],
   patch: Partial<Session['workflowState']> = {},
 ): Session {
-  sessions.updateWorkflowState(session.id, current => ({
+  sessions.updateWorkflowState(session.id, (current) => ({
     ...current,
     ...patch,
     lastHook: hook,
@@ -100,7 +122,7 @@ function extractPromptText(prompt: string | ContentBlock[]): string {
 
   return prompt
     .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
-    .map(block => block.text.trim())
+    .map((block) => block.text.trim())
     .filter(Boolean)
     .join('\n\n')
     .trim();
@@ -117,11 +139,15 @@ function extractClaimedCompletedOutcomes(text: string): string[] {
 
   const sentences = trimmed
     .split(/(?<=[.!?])\s+/)
-    .map(sentence => sentence.trim())
+    .map((sentence) => sentence.trim())
     .filter(Boolean);
 
   return sentences
-    .filter(sentence => /\b(completed?|finished?|validated?|implemented?|created?|added|wrote|fixed)\b/i.test(sentence))
+    .filter((sentence) =>
+      /\b(completed?|finished?|validated?|implemented?|created?|added|wrote|fixed)\b/i.test(
+        sentence,
+      ),
+    )
     .slice(0, 5);
 }
 
@@ -131,23 +157,39 @@ function extractRemainingGaps(text: string): string[] {
 
   const sentences = trimmed
     .split(/(?<=[.!?])\s+/)
-    .map(sentence => sentence.trim())
+    .map((sentence) => sentence.trim())
     .filter(Boolean);
 
   return sentences
-    .filter(sentence => /\b(still|missing|need|remaining|not yet|left to|have not)\b/i.test(sentence))
+    .filter((sentence) =>
+      /\b(still|missing|need|remaining|not yet|left to|have not)\b/i.test(sentence),
+    )
     .slice(0, 5);
 }
 
 function buildWorkerProgressReport(
   goal: string,
-  result: Pick<WorkerPassResult, 'text' | 'askedUser' | 'hadError' | 'success' | 'commandCount' | 'fileChangeCount' | 'recentCommands' | 'changedFiles'>,
+  result: Pick<
+    WorkerPassResult,
+    | 'text'
+    | 'askedUser'
+    | 'hadError'
+    | 'success'
+    | 'commandCount'
+    | 'fileChangeCount'
+    | 'recentCommands'
+    | 'changedFiles'
+  >,
 ): WorkerProgressReport {
   const meaningfulExecution = result.commandCount > 0 || result.fileChangeCount > 0;
   const changedFiles = result.changedFiles ?? [];
   const recentCommands = result.recentCommands ?? [];
   const validationCommands = recentCommands
-    .filter(command => /\b(test|vitest|jest|pytest|npm test|pnpm test|yarn test|grader|validate|check|lint)\b/i.test(command))
+    .filter((command) =>
+      /\b(test|vitest|jest|pytest|npm test|pnpm test|yarn test|grader|validate|check|lint)\b/i.test(
+        command,
+      ),
+    )
     .slice(0, 10);
   const blockers = result.hadError
     ? ['The worker pass reported an error or abnormal termination.']
@@ -177,9 +219,7 @@ function buildWorkerProgressReport(
 
 function summarizeWorkerPass(report: WorkerProgressReport): string {
   const changedFiles = report.artifacts;
-  const recentCommands = report.validationCommands.length > 0
-    ? report.validationCommands
-    : [];
+  const recentCommands = report.validationCommands.length > 0 ? report.validationCommands : [];
   const parts = [
     `Textual response: ${report.textualResponse}`,
     `Command executions: ${report.commandCount}`,
@@ -286,22 +326,47 @@ function parseMonitorDecision(text: string): MonitorDecision | null {
 
   try {
     const parsed = JSON.parse(trimmed.slice(start, end + 1)) as Partial<MonitorDecision>;
-    if (parsed.status !== 'complete' && parsed.status !== 'continue' && parsed.status !== 'blocked') {
+    if (
+      parsed.status !== 'complete' &&
+      parsed.status !== 'continue' &&
+      parsed.status !== 'blocked'
+    ) {
       return null;
     }
-    const confidence = parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low'
-      ? parsed.confidence
-      : 'low';
+    const confidence =
+      parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low'
+        ? parsed.confidence
+        : 'low';
     return {
       status: parsed.status,
       confidence,
       rationale: (parsed.rationale || '').trim(),
       steering: (parsed.steering || '').trim(),
       completionSummary: (parsed.completionSummary || '').trim(),
-      acceptedEvidence: Array.isArray(parsed.acceptedEvidence) ? parsed.acceptedEvidence.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean) : [],
-      missingEvidence: Array.isArray(parsed.missingEvidence) ? parsed.missingEvidence.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean) : [],
-      requiredNextProof: Array.isArray(parsed.requiredNextProof) ? parsed.requiredNextProof.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean) : [],
-      disallowedDrift: Array.isArray(parsed.disallowedDrift) ? parsed.disallowedDrift.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean) : [],
+      acceptedEvidence: Array.isArray(parsed.acceptedEvidence)
+        ? parsed.acceptedEvidence
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      missingEvidence: Array.isArray(parsed.missingEvidence)
+        ? parsed.missingEvidence
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      requiredNextProof: Array.isArray(parsed.requiredNextProof)
+        ? parsed.requiredNextProof
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      disallowedDrift: Array.isArray(parsed.disallowedDrift)
+        ? parsed.disallowedDrift
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
       blockingReason: (parsed.blockingReason || '').trim(),
     };
   } catch {
@@ -309,22 +374,30 @@ function parseMonitorDecision(text: string): MonitorDecision | null {
   }
 }
 
-function normalizeMonitorDecision(workerResult: WorkerPassResult, decision: MonitorDecision): MonitorDecision {
-  const hasStrongExecutionEvidence = workerResult.success === true
-    && !workerResult.hadError
-    && workerResult.commandCount > 0
-    && workerResult.fileChangeCount >= 3;
+function normalizeMonitorDecision(
+  workerResult: WorkerPassResult,
+  decision: MonitorDecision,
+): MonitorDecision {
+  const hasStrongExecutionEvidence =
+    workerResult.success === true &&
+    !workerResult.hadError &&
+    workerResult.commandCount > 0 &&
+    workerResult.fileChangeCount >= 3;
 
   if (decision.status === 'complete' && !workerResult.text.trim() && !hasStrongExecutionEvidence) {
     return {
       status: 'continue',
       confidence: 'high',
-      rationale: 'The worker showed activity, but there is no explicit textual evidence that the original request is fully complete yet.',
-      steering: 'Inspect the latest changes, verify the remaining acceptance criteria against the original request, finish any missing work, and then report concrete completion evidence before stopping.',
+      rationale:
+        'The worker showed activity, but there is no explicit textual evidence that the original request is fully complete yet.',
+      steering:
+        'Inspect the latest changes, verify the remaining acceptance criteria against the original request, finish any missing work, and then report concrete completion evidence before stopping.',
       completionSummary: '',
       acceptedEvidence: [],
       missingEvidence: ['Explicit completion evidence tied to the original request.'],
-      requiredNextProof: ['Report the completed outcomes, validation results, and why they satisfy the original goal.'],
+      requiredNextProof: [
+        'Report the completed outcomes, validation results, and why they satisfy the original goal.',
+      ],
       disallowedDrift: ['Do not stop after silent activity or file changes alone.'],
       blockingReason: '',
     };
@@ -335,22 +408,30 @@ function normalizeMonitorDecision(workerResult: WorkerPassResult, decision: Moni
 
 function classifyWorkerPassForContinuation(workerResult: WorkerPassResult): MonitorDecision | null {
   const hasTextResponse = workerResult.text.trim().length > 0;
-  const hasStrongExecutionEvidence = workerResult.success === true
-    && !workerResult.hadError
-    && workerResult.commandCount > 0
-    && workerResult.fileChangeCount >= 3;
+  const hasStrongExecutionEvidence =
+    workerResult.success === true &&
+    !workerResult.hadError &&
+    workerResult.commandCount > 0 &&
+    workerResult.fileChangeCount >= 3;
 
   if (workerResult.hadError || workerResult.success === false) {
     return {
       status: 'continue',
       confidence: 'high',
-      rationale: 'The latest pass encountered errors or did not complete successfully, so the task is still incomplete.',
-      steering: 'Identify the failing step, fix it directly, validate the result, and then report explicit completion evidence tied to the original request.',
+      rationale:
+        'The latest pass encountered errors or did not complete successfully, so the task is still incomplete.',
+      steering:
+        'Identify the failing step, fix it directly, validate the result, and then report explicit completion evidence tied to the original request.',
       completionSummary: '',
       acceptedEvidence: [],
-      missingEvidence: ['A successful pass without errors.', 'Validation evidence tied to the original request.'],
+      missingEvidence: [
+        'A successful pass without errors.',
+        'Validation evidence tied to the original request.',
+      ],
       requiredNextProof: ['Fix the failing step.', 'Run validation and report the result.'],
-      disallowedDrift: ['Do not branch into unrelated improvements before the failing step is fixed.'],
+      disallowedDrift: [
+        'Do not branch into unrelated improvements before the failing step is fixed.',
+      ],
       blockingReason: '',
     };
   }
@@ -359,19 +440,34 @@ function classifyWorkerPassForContinuation(workerResult: WorkerPassResult): Moni
     return {
       status: 'continue',
       confidence: 'high',
-      rationale: workerResult.fileChangeCount > 0
-        ? 'The worker showed limited activity, but there is still no explicit completion evidence for the original request.'
-        : 'The worker made no substantive completion report and did not change files, so the original request is still incomplete.',
-      steering: workerResult.fileChangeCount > 0
-        ? 'Inspect the latest changes, finish the missing implementation or validation work, and then report explicit completion evidence before stopping.'
-        : 'Re-anchor on the original request, make concrete progress in the repository, and then report explicit completion evidence before stopping.',
+      rationale:
+        workerResult.fileChangeCount > 0
+          ? 'The worker showed limited activity, but there is still no explicit completion evidence for the original request.'
+          : 'The worker made no substantive completion report and did not change files, so the original request is still incomplete.',
+      steering:
+        workerResult.fileChangeCount > 0
+          ? 'Inspect the latest changes, finish the missing implementation or validation work, and then report explicit completion evidence before stopping.'
+          : 'Re-anchor on the original request, make concrete progress in the repository, and then report explicit completion evidence before stopping.',
       completionSummary: '',
-      acceptedEvidence: workerResult.fileChangeCount > 0 ? ['Some implementation activity or file changes were observed.'] : [],
+      acceptedEvidence:
+        workerResult.fileChangeCount > 0
+          ? ['Some implementation activity or file changes were observed.']
+          : [],
       missingEvidence: ['Explicit completion evidence tied to the original request.'],
-      requiredNextProof: workerResult.fileChangeCount > 0
-        ? ['Explain what the latest changes accomplished.', 'Run or report the missing validation tied to the goal.']
-        : ['Make a concrete repository change or run a meaningful validation.', 'Report how that progress advances the original goal.'],
-      disallowedDrift: ['Do not stop after exploration or silent activity.', 'Do not assume progress is self-evident without explaining it.'],
+      requiredNextProof:
+        workerResult.fileChangeCount > 0
+          ? [
+              'Explain what the latest changes accomplished.',
+              'Run or report the missing validation tied to the goal.',
+            ]
+          : [
+              'Make a concrete repository change or run a meaningful validation.',
+              'Report how that progress advances the original goal.',
+            ],
+      disallowedDrift: [
+        'Do not stop after exploration or silent activity.',
+        'Do not assume progress is self-evident without explaining it.',
+      ],
       blockingReason: '',
     };
   }
@@ -379,7 +475,12 @@ function classifyWorkerPassForContinuation(workerResult: WorkerPassResult): Moni
   return null;
 }
 
-function buildSteeringPrompt(goal: string, decision: MonitorDecision, iteration: number, proofContract?: SessionNextProofContract): string {
+function buildSteeringPrompt(
+  goal: string,
+  decision: MonitorDecision,
+  iteration: number,
+  proofContract?: SessionNextProofContract,
+): string {
   const contract = proofContract ?? buildNextProofContract(goal, decision);
   const parts = [
     `Continue working on the same task. This is monitored continuation pass ${iteration}.`,
@@ -395,27 +496,51 @@ function buildSteeringPrompt(goal: string, decision: MonitorDecision, iteration:
   }
 
   if (decision.acceptedEvidence.length > 0) {
-    parts.push('', 'Evidence already accepted:', ...decision.acceptedEvidence.map(item => `- ${item}`));
+    parts.push(
+      '',
+      'Evidence already accepted:',
+      ...decision.acceptedEvidence.map((item) => `- ${item}`),
+    );
   }
 
   if (decision.missingEvidence.length > 0) {
-    parts.push('', 'Evidence still missing:', ...decision.missingEvidence.map(item => `- ${item}`));
+    parts.push(
+      '',
+      'Evidence still missing:',
+      ...decision.missingEvidence.map((item) => `- ${item}`),
+    );
   }
 
   if (decision.requiredNextProof.length > 0) {
-    parts.push('', 'Your next pass must prove:', ...decision.requiredNextProof.map(item => `- ${item}`));
+    parts.push(
+      '',
+      'Your next pass must prove:',
+      ...decision.requiredNextProof.map((item) => `- ${item}`),
+    );
   }
 
   if (decision.disallowedDrift.length > 0) {
-    parts.push('', 'Avoid this drift until the missing proof is produced:', ...decision.disallowedDrift.map(item => `- ${item}`));
+    parts.push(
+      '',
+      'Avoid this drift until the missing proof is produced:',
+      ...decision.disallowedDrift.map((item) => `- ${item}`),
+    );
   }
 
   if (contract) {
     if (contract.requiredArtifacts.length > 0) {
-      parts.push('', 'Required artifacts for this pass:', ...contract.requiredArtifacts.map(item => `- ${item}`));
+      parts.push(
+        '',
+        'Required artifacts for this pass:',
+        ...contract.requiredArtifacts.map((item) => `- ${item}`),
+      );
     }
     if (contract.requiredValidation.length > 0) {
-      parts.push('', 'Required validation for this pass:', ...contract.requiredValidation.map(item => `- ${item}`));
+      parts.push(
+        '',
+        'Required validation for this pass:',
+        ...contract.requiredValidation.map((item) => `- ${item}`),
+      );
     }
     parts.push('', `Stop condition: ${contract.stopCondition}`);
   }
@@ -428,7 +553,11 @@ function buildSteeringPrompt(goal: string, decision: MonitorDecision, iteration:
   return parts.join('\n');
 }
 
-function buildAskUserReviewPrompt(goal: string, questionsJson: string, latestOutput: string): string {
+function buildAskUserReviewPrompt(
+  goal: string,
+  questionsJson: string,
+  latestOutput: string,
+): string {
   return [
     'You are deciding whether a worker question actually requires a human.',
     '',
@@ -496,9 +625,10 @@ async function runWorkerPass(
     }
   }, 1000);
 
-  const stream = mode === 'continue'
-    ? sessions.continueSession(session.id)
-    : sessions.sendPrompt(session.id, prompt as string | ContentBlock[]);
+  const stream =
+    mode === 'continue'
+      ? sessions.continueSession(session.id)
+      : sessions.sendPrompt(session.id, prompt as string | ContentBlock[]);
   try {
     const result = await handleOutputStream(
       stream,
@@ -551,7 +681,17 @@ async function runWorkerPass(
 async function runMonitorDecision(
   session: Session,
   goal: string,
-  workerResult: Pick<WorkerPassResult, 'text' | 'askedUser' | 'hadError' | 'success' | 'commandCount' | 'fileChangeCount' | 'recentCommands' | 'changedFiles'>,
+  workerResult: Pick<
+    WorkerPassResult,
+    | 'text'
+    | 'askedUser'
+    | 'hadError'
+    | 'success'
+    | 'commandCount'
+    | 'fileChangeCount'
+    | 'recentCommands'
+    | 'changedFiles'
+  >,
   iteration: number,
 ): Promise<MonitorDecision> {
   applyWorkflowHook(session, 'before_monitor_review', {
@@ -563,7 +703,13 @@ async function runMonitorDecision(
   const latestOutput = summarizeWorkerPass(report);
   const stream = sessions.sendMonitorPrompt(
     session.id,
-    buildMonitorPrompt(goal, latestOutput, report, iteration, session.workflowState.nextProofContract),
+    buildMonitorPrompt(
+      goal,
+      latestOutput,
+      report,
+      iteration,
+      session.workflowState.nextProofContract,
+    ),
   );
   for await (const event of stream) {
     if (event.type === 'text_delta') {
@@ -577,15 +723,18 @@ async function runMonitorDecision(
   return {
     status: 'continue',
     confidence: 'low',
-      rationale: 'The monitor response was invalid, so the safest default is to keep working.',
-      steering: 'Review the original request, identify the main missing gap, implement or validate that gap directly, and then report concrete evidence that the request is satisfied.',
-      completionSummary: '',
-      acceptedEvidence: [],
-      missingEvidence: ['A valid monitor decision payload.'],
-      requiredNextProof: ['Review the original request and produce concrete evidence for the remaining gap.'],
-      disallowedDrift: ['Do not assume completion without a valid monitor-visible explanation.'],
-      blockingReason: '',
-    };
+    rationale: 'The monitor response was invalid, so the safest default is to keep working.',
+    steering:
+      'Review the original request, identify the main missing gap, implement or validate that gap directly, and then report concrete evidence that the request is satisfied.',
+    completionSummary: '',
+    acceptedEvidence: [],
+    missingEvidence: ['A valid monitor decision payload.'],
+    requiredNextProof: [
+      'Review the original request and produce concrete evidence for the remaining gap.',
+    ],
+    disallowedDrift: ['Do not assume completion without a valid monitor-visible explanation.'],
+    blockingReason: '',
+  };
 }
 
 async function runAskUserDecision(
@@ -635,13 +784,18 @@ async function resolveAskUserIfPossible(
     applyWorkflowHook(session, 'on_human_question', {
       status: 'awaiting_human',
       iteration,
-      awaitingHumanReason: decision.rationale || 'The worker hit a real non-obvious decision point.',
+      awaitingHumanReason:
+        decision.rationale || 'The worker hit a real non-obvious decision point.',
     });
-    await channel.send(`*Monitor: human input required. ${truncate(decision.rationale || 'The worker hit a real non-obvious decision point.', 400)}*`);
+    await channel.send(
+      `*Monitor: human input required. ${truncate(decision.rationale || 'The worker hit a real non-obvious decision point.', 400)}*`,
+    );
     return { handled: false };
   }
 
-  await channel.send(`*Monitor: auto-resolving worker question to keep progress moving. ${truncate(decision.rationale || 'The better path was already implied by the original request.', 400)}*`);
+  await channel.send(
+    `*Monitor: auto-resolving worker question to keep progress moving. ${truncate(decision.rationale || 'The better path was already implied by the original request.', 400)}*`,
+  );
   const autoDecision: MonitorDecision = {
     status: 'continue',
     confidence: 'medium',
@@ -657,14 +811,16 @@ async function resolveAskUserIfPossible(
   applyWorkflowHook(session, 'after_monitor_decision', {
     status: 'retrying',
     iteration,
-    lastMonitorRationale: decision.rationale || 'The better path was already implied by the original request.',
+    lastMonitorRationale:
+      decision.rationale || 'The better path was already implied by the original request.',
     lastMonitorDecision: autoDecision,
     nextProofContract: buildNextProofContract(goal, autoDecision),
   });
   const nextResult = await runWorkerPass(
     session,
     channel,
-    decision.autoResponse || 'Choose the option that best fulfills the original request and continue.',
+    decision.autoResponse ||
+      'Choose the option that best fulfills the original request and continue.',
     iteration + 1,
     'prompt',
   );
@@ -681,7 +837,13 @@ async function runMonitorLoop(
   let currentSession = refreshSession(session);
 
   for (let iteration = 1; iteration <= MAX_MONITOR_ITERATIONS; iteration++) {
-    const askUserResolution = await resolveAskUserIfPossible(currentSession, channel, goal, workerResult, iteration);
+    const askUserResolution = await resolveAskUserIfPossible(
+      currentSession,
+      channel,
+      goal,
+      workerResult,
+      iteration,
+    );
     if (askUserResolution.handled) {
       workerResult = askUserResolution.result!;
       currentSession = refreshSession(currentSession);
@@ -702,7 +864,9 @@ async function runMonitorLoop(
         lastMonitorDecision: preclassifiedDecision,
         nextProofContract,
       });
-      await channel.send(`*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(preclassifiedDecision.rationale, 300)}*`);
+      await channel.send(
+        `*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(preclassifiedDecision.rationale, 300)}*`,
+      );
       workerResult = await runWorkerPass(
         currentSession,
         channel,
@@ -716,13 +880,18 @@ async function runMonitorLoop(
 
     const rawDecision = await runMonitorDecision(currentSession, goal, workerResult, iteration);
     const decision = normalizeMonitorDecision(workerResult, rawDecision);
-    const nextProofContract = buildNextProofContract(goal, decision, buildWorkerProgressReport(goal, workerResult));
+    const nextProofContract = buildNextProofContract(
+      goal,
+      decision,
+      buildWorkerProgressReport(goal, workerResult),
+    );
     currentSession = applyWorkflowHook(currentSession, 'after_monitor_decision', {
-      status: decision.status === 'continue'
-        ? 'retrying'
-        : decision.status === 'complete'
-          ? 'completed'
-          : 'blocked',
+      status:
+        decision.status === 'continue'
+          ? 'retrying'
+          : decision.status === 'complete'
+            ? 'completed'
+            : 'blocked',
       iteration,
       lastMonitorRationale: decision.rationale,
       lastMonitorDecision: decision,
@@ -737,8 +906,13 @@ async function runMonitorLoop(
         lastMonitorDecision: decision,
         nextProofContract: undefined,
       });
-      const summary = decision.completionSummary || decision.rationale || 'The monitor judged the request complete.';
-      await channel.send(`*Monitor: completion bar met (${decision.confidence}). ${truncate(summary, 400)}*`);
+      const summary =
+        decision.completionSummary ||
+        decision.rationale ||
+        'The monitor judged the request complete.';
+      await channel.send(
+        `*Monitor: completion bar met (${decision.confidence}). ${truncate(summary, 400)}*`,
+      );
       return;
     }
 
@@ -756,8 +930,16 @@ async function runMonitorLoop(
       return;
     }
 
-    await channel.send(`*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(decision.rationale || 'continue working', 300)}*`);
-    workerResult = await runWorkerPass(currentSession, channel, buildSteeringPrompt(goal, decision, iteration, nextProofContract), iteration + 1, 'prompt');
+    await channel.send(
+      `*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(decision.rationale || 'continue working', 300)}*`,
+    );
+    workerResult = await runWorkerPass(
+      currentSession,
+      channel,
+      buildSteeringPrompt(goal, decision, iteration, nextProofContract),
+      iteration + 1,
+      'prompt',
+    );
     currentSession = refreshSession(currentSession);
   }
 
@@ -765,11 +947,14 @@ async function runMonitorLoop(
     status: 'blocked',
     confidence: 'medium',
     rationale: 'Reached the continuation safety limit.',
-    steering: 'Review the latest worker report and decide whether to continue with tighter proof obligations or intervene manually.',
+    steering:
+      'Review the latest worker report and decide whether to continue with tighter proof obligations or intervene manually.',
     completionSummary: '',
     acceptedEvidence: [],
     missingEvidence: ['Clear completion evidence for the original request.'],
-    requiredNextProof: ['Produce a worker pass that directly addresses the latest missing evidence.'],
+    requiredNextProof: [
+      'Produce a worker pass that directly addresses the latest missing evidence.',
+    ],
     disallowedDrift: ['Do not keep iterating without narrowing the missing proof.'],
     blockingReason: 'Reached the continuation safety limit.',
   };
@@ -781,7 +966,9 @@ async function runMonitorLoop(
     lastMonitorDecision: limitDecision,
     nextProofContract: buildNextProofContract(goal, limitDecision),
   });
-  await channel.send('*Monitor: reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.*');
+  await channel.send(
+    '*Monitor: reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.*',
+  );
 }
 
 export async function executeSessionPrompt(
@@ -807,9 +994,12 @@ export async function executeSessionPrompt(
     return;
   }
 
-  let workerResult = await runWorkerPass(session, channel, prompt, 1, 'prompt');
+  const workerResult = await runWorkerPass(session, channel, prompt, 1, 'prompt');
   session = refreshSession(session);
-  if (workerResult.abortReason === 'user' || (workerResult.abortReason !== 'watchdog' && isAbortError(workerResult.text))) {
+  if (
+    workerResult.abortReason === 'user' ||
+    (workerResult.abortReason !== 'watchdog' && isAbortError(workerResult.text))
+  ) {
     return;
   }
   await runMonitorLoop(session, channel, goal, workerResult);
@@ -828,7 +1018,8 @@ export async function executeSessionContinue(
       status: 'blocked',
       iteration,
       awaitingHumanReason: 'Monitor mode is enabled but no monitor goal is saved for this session.',
-      lastMonitorRationale: 'Monitor mode is enabled but no monitor goal is saved for this session.',
+      lastMonitorRationale:
+        'Monitor mode is enabled but no monitor goal is saved for this session.',
       lastMonitorDecision: {
         status: 'blocked',
         confidence: 'high',
@@ -842,34 +1033,37 @@ export async function executeSessionContinue(
         blockingReason: 'Monitor mode is enabled but no monitor goal is saved for this session.',
       },
     });
-    await channel.send('*Monitor: blocked. No monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.*');
+    await channel.send(
+      '*Monitor: blocked. No monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.*',
+    );
     return;
   }
   const nextProofContract = liveSession.workflowState.nextProofContract;
   const workerResult = nextProofContract
     ? await runWorkerPass(
-      liveSession,
-      channel,
-      buildSteeringPrompt(
-        goal,
-        liveSession.workflowState.lastMonitorDecision ?? {
-          status: 'continue',
-          confidence: 'medium',
-          rationale: liveSession.workflowState.lastMonitorRationale || 'The task is still incomplete.',
-          steering: '',
-          completionSummary: '',
-          acceptedEvidence: nextProofContract.acceptedEvidence,
-          missingEvidence: nextProofContract.missingEvidence,
-          requiredNextProof: nextProofContract.requiredNextProof,
-          disallowedDrift: nextProofContract.avoidUntilProved,
-          blockingReason: '',
-        },
+        liveSession,
+        channel,
+        buildSteeringPrompt(
+          goal,
+          liveSession.workflowState.lastMonitorDecision ?? {
+            status: 'continue',
+            confidence: 'medium',
+            rationale:
+              liveSession.workflowState.lastMonitorRationale || 'The task is still incomplete.',
+            steering: '',
+            completionSummary: '',
+            acceptedEvidence: nextProofContract.acceptedEvidence,
+            missingEvidence: nextProofContract.missingEvidence,
+            requiredNextProof: nextProofContract.requiredNextProof,
+            disallowedDrift: nextProofContract.avoidUntilProved,
+            blockingReason: '',
+          },
+          iteration,
+          nextProofContract,
+        ),
         iteration,
-        nextProofContract,
-      ),
-      iteration,
-      'prompt',
-    )
+        'prompt',
+      )
     : await runWorkerPass(liveSession, channel, null, iteration, 'continue');
   liveSession = refreshSession(liveSession);
   await runMonitorLoop(liveSession, channel, goal, workerResult);

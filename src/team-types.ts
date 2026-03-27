@@ -6,9 +6,9 @@ export type TeamTaskPhase = 'planning' | 'executing' | 'reviewing' | 'completed'
 export interface PhaseAssignment {
   role: string;
   description: string;
-  agentName?: string;       // filled after team assembly
+  agentName?: string; // filled after team assembly
   status: TeamPhaseStatus;
-  result?: string;          // collected response text
+  result?: string; // collected response text
 }
 
 export interface TaskPhase {

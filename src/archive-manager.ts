@@ -1,9 +1,4 @@
-import {
-  ChannelType,
-  EmbedBuilder,
-  type Guild,
-  type ForumChannel,
-} from 'discord.js';
+import { ChannelType, EmbedBuilder, type Guild, type ForumChannel } from 'discord.js';
 import { Store } from './persistence.ts';
 import { config } from './config.ts';
 import { getAllSessions, endSession, getSessionsByCategory } from './thread-manager.ts';
@@ -23,12 +18,15 @@ async function saveArchived(): Promise<void> {
 }
 
 export function getArchivedSessions(categoryId: string): ArchivedSession[] {
-  return archived.filter(a => a.categoryId === categoryId);
+  return archived.filter((a) => a.categoryId === categoryId);
 }
 
 // ─── Ensure #history forum channel ────────────────────────────────────────────
 
-async function ensureHistoryChannel(guild: Guild, categoryId: string): Promise<ForumChannel | null> {
+async function ensureHistoryChannel(
+  guild: Guild,
+  categoryId: string,
+): Promise<ForumChannel | null> {
   const project = getProject(categoryId);
   if (!project) return null;
 
@@ -42,7 +40,8 @@ async function ensureHistoryChannel(guild: Guild, categoryId: string): Promise<F
 
   // Try to find an existing #history Forum channel in the category
   const existing = guild.channels.cache.find(
-    ch => ch.parentId === categoryId && ch.name === 'history' && ch.type === ChannelType.GuildForum,
+    (ch) =>
+      ch.parentId === categoryId && ch.name === 'history' && ch.type === ChannelType.GuildForum,
   );
   if (existing?.type === ChannelType.GuildForum) {
     setHistoryChannelId(categoryId, existing.id);
@@ -104,8 +103,16 @@ export async function archiveSession(
           { name: 'Mode', value: session.mode, inline: true },
           { name: 'Messages', value: `${session.messageCount}`, inline: true },
           { name: 'Directory', value: `\`${session.directory}\``, inline: false },
-          { name: 'Active', value: `${formatDuration(record.archivedAt - record.createdAt)}`, inline: true },
-          { name: 'Cost', value: session.totalCost > 0 ? `$${session.totalCost.toFixed(4)}` : 'N/A', inline: true },
+          {
+            name: 'Active',
+            value: `${formatDuration(record.archivedAt - record.createdAt)}`,
+            inline: true,
+          },
+          {
+            name: 'Cost',
+            value: session.totalCost > 0 ? `$${session.totalCost.toFixed(4)}` : 'N/A',
+            inline: true,
+          },
         );
 
       if (record.summary) {
@@ -132,14 +139,18 @@ export async function archiveSession(
         await channel.delete(`Session archived by threadcord`);
       }
     } catch (err) {
-      console.error(`[archive-manager] Failed to delete session channel: ${(err as Error).message}`);
+      console.error(
+        `[archive-manager] Failed to delete session channel: ${(err as Error).message}`,
+      );
     }
   }
 
   // End the session record
   try {
     await endSession(session.id);
-  } catch { /* already ended */ }
+  } catch {
+    /* already ended */
+  }
 
   // Persist the archive record
   archived.push(record);
@@ -197,11 +208,19 @@ export async function checkAutoArchive(guild: Guild): Promise<void> {
     }
 
     for (const sessionId of toArchive) {
-      const session = categorySessions.find(s => s.id === sessionId);
+      const session = categorySessions.find((s) => s.id === sessionId);
       if (!session) continue;
-      console.log(`[archive-manager] Auto-archiving session "${session.agentLabel}" (inactive: ${Math.round((now - session.lastActivity) / 86400000)}d)`);
-      await archiveSession(session, guild, 'Auto-archived due to inactivity or session limit.').catch(err =>
-        console.error(`[archive-manager] Auto-archive failed for "${session.agentLabel}": ${err.message}`),
+      console.log(
+        `[archive-manager] Auto-archiving session "${session.agentLabel}" (inactive: ${Math.round((now - session.lastActivity) / 86400000)}d)`,
+      );
+      await archiveSession(
+        session,
+        guild,
+        'Auto-archived due to inactivity or session limit.',
+      ).catch((err) =>
+        console.error(
+          `[archive-manager] Auto-archive failed for "${session.agentLabel}": ${err.message}`,
+        ),
       );
     }
   }

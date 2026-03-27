@@ -14,26 +14,29 @@
 
 ## File Structure
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
-| Modify | `src/commands.ts` | /session new 和 /session resume 的参数定义 |
-| Modify | `src/command-handlers.ts` | 会话创建逻辑重构 |
-| Modify | `test/command-handlers-sync.test.ts` | 更新测试 |
+| Action | Path                                 | Responsibility                             |
+| ------ | ------------------------------------ | ------------------------------------------ |
+| Modify | `src/commands.ts`                    | /session new 和 /session resume 的参数定义 |
+| Modify | `src/command-handlers.ts`            | 会话创建逻辑重构                           |
+| Modify | `test/command-handlers-sync.test.ts` | 更新测试                                   |
 
 ---
 
 ### Task 1: 修改 /session new 命令参数
 
 **Files:**
+
 - Modify: `src/commands.ts`
 
 - [ ] **Step 1: 替换 directory 参数为 project 参数**
 
 `/session new` 子命令：
+
 - 移除 `directory` option
 - 新增 `project` option（string, required, autocomplete enabled）
 
 `/session resume` 子命令：
+
 - 移除 `directory` option
 - 新增 `project` option（string, required, autocomplete enabled）
 
@@ -47,6 +50,7 @@ git commit -m "feat: replace directory option with project option in /session co
 ### Task 2: 实现 project autocomplete
 
 **Files:**
+
 - Modify: `src/command-handlers.ts`
 - Modify: `src/bot.ts`（路由 autocomplete 事件到 handleProjectAutocomplete）
 
@@ -54,13 +58,15 @@ git commit -m "feat: replace directory option with project option in /session co
 // 在 command-handlers.ts 顶部新增 import
 import { getAllRegisteredProjects } from './project-registry.ts';
 
-export async function handleProjectAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+export async function handleProjectAutocomplete(
+  interaction: AutocompleteInteraction,
+): Promise<void> {
   const focused = interaction.options.getFocused();
   const projects = getAllRegisteredProjects();
   const filtered = projects
-    .filter(p => p.name.toLowerCase().includes(focused.toLowerCase()))
+    .filter((p) => p.name.toLowerCase().includes(focused.toLowerCase()))
     .slice(0, 25)
-    .map(p => ({ name: `${p.name} (${p.path})`, value: p.name }));
+    .map((p) => ({ name: `${p.name} (${p.path})`, value: p.name }));
   await interaction.respond(filtered);
 }
 ```
@@ -79,11 +85,13 @@ git commit -m "feat: add project autocomplete for /session commands"
 ### Task 3: 重构 handleSessionNew
 
 **Files:**
+
 - Modify: `src/command-handlers.ts`
 
 - [ ] **Step 1: 重写 handleSessionNew 的项目解析逻辑**
 
 核心变更：
+
 - 从 `interaction.options.getString('project')` 获取项目名
 - 从 `project-registry.ts` 的 `getProjectByName(projectName)` 获取项目
 - 如果项目不存在，回复错误："No project found. Register one with `agentcord project init`."
@@ -116,6 +124,7 @@ git commit -m "refactor: /session new requires mounted project, remove auto-deri
 ### Task 4: 清理遗留代码
 
 **Files:**
+
 - Modify: `src/command-handlers.ts`
 - Modify: `src/utils.ts`
 

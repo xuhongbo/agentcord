@@ -2,9 +2,7 @@ import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdtempSync } from
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { config } from '../config.ts';
-import type {
-  Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
-} from './types.ts';
+import type { Provider, ProviderEvent, ProviderSessionOptions, ContentBlock } from './types.ts';
 
 // Lazy-loaded SDK constructor — populated on first use
 let Codex: any;
@@ -29,8 +27,10 @@ function injectAgentsMd(directory: string, parts: string[]): string | null {
   if (existsSync(agentsPath)) {
     original = readFileSync(agentsPath, 'utf-8');
     // Remove any existing sentinel block before re-injecting
-    const cleaned = original
-      .replace(new RegExp(`${escapeRegex(SENTINEL_START)}[\\s\\S]*?${escapeRegex(SENTINEL_END)}\\n?`), '');
+    const cleaned = original.replace(
+      new RegExp(`${escapeRegex(SENTINEL_START)}[\\s\\S]*?${escapeRegex(SENTINEL_END)}\\n?`),
+      '',
+    );
     writeFileSync(agentsPath, cleaned + '\n' + injected + '\n', 'utf-8');
   } else {
     writeFileSync(agentsPath, injected + '\n', 'utf-8');
@@ -43,7 +43,11 @@ function restoreAgentsMd(directory: string, original: string | null): void {
   const agentsPath = join(directory, 'AGENTS.md');
   if (original === null) {
     // We created the file — remove it
-    try { unlinkSync(agentsPath); } catch { /* may already be deleted */ }
+    try {
+      unlinkSync(agentsPath);
+    } catch {
+      /* may already be deleted */
+    }
   } else if (original !== undefined) {
     writeFileSync(agentsPath, original, 'utf-8');
   }
@@ -53,7 +57,10 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function writeImagesToTemp(blocks: ContentBlock[]): { textParts: string[]; localImages: Array<{ type: 'local_image'; path: string }> } {
+function writeImagesToTemp(blocks: ContentBlock[]): {
+  textParts: string[];
+  localImages: Array<{ type: 'local_image'; path: string }>;
+} {
   const textParts: string[] = [];
   const localImages: Array<{ type: 'local_image'; path: string }> = [];
 
@@ -79,10 +86,9 @@ export class CodexProvider implements Provider {
   readonly name = 'codex' as const;
 
   supports(feature: string): boolean {
-    return [
-      'command_execution', 'file_changes', 'reasoning',
-      'todo_list', 'continue',
-    ].includes(feature);
+    return ['command_execution', 'file_changes', 'reasoning', 'todo_list', 'continue'].includes(
+      feature,
+    );
   }
 
   async *sendPrompt(
@@ -104,9 +110,8 @@ export class CodexProvider implements Provider {
       if (textParts.length > 0) {
         inputParts.push({ type: 'text', text: textParts.join('\n') });
       }
-      input = inputParts.length === 1 && inputParts[0].type === 'text'
-        ? inputParts[0].text!
-        : inputParts;
+      input =
+        inputParts.length === 1 && inputParts[0].type === 'text' ? inputParts[0].text! : inputParts;
     }
 
     // Inject system prompt parts into AGENTS.md
@@ -149,9 +154,7 @@ export class CodexProvider implements Provider {
     }
   }
 
-  async *continueSession(
-    options: ProviderSessionOptions,
-  ): AsyncGenerator<ProviderEvent> {
+  async *continueSession(options: ProviderSessionOptions): AsyncGenerator<ProviderEvent> {
     await loadSdk();
 
     if (!options.providerSessionId) {
@@ -263,7 +266,10 @@ export class CodexProvider implements Provider {
               case 'file_change': {
                 const changes = (item.changes || item.files || []).map((f: any) => ({
                   filePath: f.path || f.file_path || f.filePath || '',
-                  changeKind: (f.kind || f.change_kind || f.changeKind || 'update') as 'add' | 'update' | 'delete',
+                  changeKind: (f.kind || f.change_kind || f.changeKind || 'update') as
+                    | 'add'
+                    | 'update'
+                    | 'delete',
                 }));
                 if (changes.length > 0) {
                   yield { type: 'file_change', changes };
@@ -300,7 +306,10 @@ export class CodexProvider implements Provider {
                   yield {
                     type: 'tool_result',
                     toolName: `${item.server}/${item.tool}`,
-                    result: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || ''),
+                    result:
+                      typeof item.output === 'string'
+                        ? item.output
+                        : JSON.stringify(item.output || ''),
                     isError: item.status === 'failed',
                   };
                 }

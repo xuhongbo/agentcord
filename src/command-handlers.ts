@@ -22,8 +22,12 @@ import type { ProviderName, SessionMode } from './types.ts';
 type SessionChannel = TextChannel | AnyThreadChannel;
 
 let logFn: (msg: string) => void = console.log;
-export function setLogger(fn: (msg: string) => void): void { logFn = fn; }
-function log(msg: string): void { logFn(msg); }
+export function setLogger(fn: (msg: string) => void): void {
+  logFn = fn;
+}
+function log(msg: string): void {
+  logFn(msg);
+}
 
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   claude: 'Claude Code',
@@ -75,17 +79,28 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
   const sub = interaction.options.getSubcommand();
 
   switch (sub) {
-    case 'setup': return handleProjectSetup(interaction);
-    case 'info': return handleProjectInfo(interaction);
-    case 'personality': return handleProjectPersonality(interaction);
-    case 'personality-clear': return handleProjectPersonalityClear(interaction);
-    case 'skill-add': return handleProjectSkillAdd(interaction);
-    case 'skill-remove': return handleProjectSkillRemove(interaction);
-    case 'skill-list': return handleProjectSkillList(interaction);
-    case 'skill-run': return handleProjectSkillRun(interaction);
-    case 'mcp-add': return handleProjectMcpAdd(interaction);
-    case 'mcp-remove': return handleProjectMcpRemove(interaction);
-    case 'mcp-list': return handleProjectMcpList(interaction);
+    case 'setup':
+      return handleProjectSetup(interaction);
+    case 'info':
+      return handleProjectInfo(interaction);
+    case 'personality':
+      return handleProjectPersonality(interaction);
+    case 'personality-clear':
+      return handleProjectPersonalityClear(interaction);
+    case 'skill-add':
+      return handleProjectSkillAdd(interaction);
+    case 'skill-remove':
+      return handleProjectSkillRemove(interaction);
+    case 'skill-list':
+      return handleProjectSkillList(interaction);
+    case 'skill-run':
+      return handleProjectSkillRun(interaction);
+    case 'mcp-add':
+      return handleProjectMcpAdd(interaction);
+    case 'mcp-remove':
+      return handleProjectMcpRemove(interaction);
+    case 'mcp-list':
+      return handleProjectMcpList(interaction);
     default:
       await interaction.reply({ content: `Unknown subcommand: ${sub}`, ephemeral: true });
   }
@@ -94,13 +109,20 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
 async function handleProjectSetup(interaction: ChatInputCommandInteraction): Promise<void> {
   // Must be in a TextChannel (not a thread)
   if (interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/project setup` in a regular channel, not inside a thread.', ephemeral: true });
+    await interaction.reply({
+      content: 'Run `/project setup` in a regular channel, not inside a thread.',
+      ephemeral: true,
+    });
     return;
   }
 
   const categoryId = (interaction.channel as TextChannel)?.parentId;
   if (!categoryId) {
-    await interaction.reply({ content: 'This channel is not under a Category. Please run this command in a channel that belongs to a Category (which represents your project).', ephemeral: true });
+    await interaction.reply({
+      content:
+        'This channel is not under a Category. Please run this command in a channel that belongs to a Category (which represents your project).',
+      ephemeral: true,
+    });
     return;
   }
 
@@ -146,7 +168,9 @@ async function handleProjectSetup(interaction: ChatInputCommandInteraction): Pro
       { name: 'Category', value: `**${categoryName}**`, inline: true },
       { name: 'Directory', value: `\`${project.directory}\``, inline: true },
     )
-    .setDescription(`Use \`/agent spawn\` in any channel under **${categoryName}** to create an agent session.${historyInfo}`);
+    .setDescription(
+      `Use \`/agent spawn\` in any channel under **${categoryName}** to create an agent session.${historyInfo}`,
+    );
 
   await interaction.editReply({ embeds: [embed] });
   log(`Project "${project.name}" set up by ${interaction.user.tag}`);
@@ -155,18 +179,24 @@ async function handleProjectSetup(interaction: ChatInputCommandInteraction): Pro
 async function handleProjectInfo(interaction: ChatInputCommandInteraction): Promise<void> {
   const categoryId = resolveProjectCategoryId(interaction);
   if (!categoryId) {
-    await interaction.reply({ content: 'Could not determine project category from this channel.', ephemeral: true });
+    await interaction.reply({
+      content: 'Could not determine project category from this channel.',
+      ephemeral: true,
+    });
     return;
   }
 
   const project = projectMgr.getProject(categoryId);
   if (!project) {
-    await interaction.reply({ content: 'No project set up for this category. Run `/project setup` first.', ephemeral: true });
+    await interaction.reply({
+      content: 'No project set up for this category. Run `/project setup` first.',
+      ephemeral: true,
+    });
     return;
   }
 
   const sessions = sessionMgr.getSessionsByCategory(categoryId);
-  const activeSessions = sessions.filter(s => s.type === 'persistent');
+  const activeSessions = sessions.filter((s) => s.type === 'persistent');
 
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
@@ -183,7 +213,10 @@ async function handleProjectInfo(interaction: ChatInputCommandInteraction): Prom
   }
 
   if (project.personality) {
-    embed.addFields({ name: 'Personality', value: `\`\`\`\n${project.personality.slice(0, 500)}\n\`\`\`` });
+    embed.addFields({
+      name: 'Personality',
+      value: `\`\`\`\n${project.personality.slice(0, 500)}\n\`\`\``,
+    });
   }
 
   await interaction.reply({ embeds: [embed], ephemeral: true });
@@ -202,10 +235,15 @@ async function handleProjectPersonality(interaction: ChatInputCommandInteraction
   }
   const prompt = interaction.options.getString('prompt', true);
   projectMgr.setPersonality(categoryId, prompt);
-  await interaction.reply({ content: `Personality set for project **${project.name}**.`, ephemeral: true });
+  await interaction.reply({
+    content: `Personality set for project **${project.name}**.`,
+    ephemeral: true,
+  });
 }
 
-async function handleProjectPersonalityClear(interaction: ChatInputCommandInteraction): Promise<void> {
+async function handleProjectPersonalityClear(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   const categoryId = resolveProjectCategoryId(interaction);
   if (!categoryId) {
     await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
@@ -240,7 +278,10 @@ async function handleProjectSkillRemove(interaction: ChatInputCommandInteraction
   }
   const name = interaction.options.getString('name', true);
   const removed = projectMgr.removeSkill(categoryId, name);
-  await interaction.reply({ content: removed ? `Skill **${name}** removed.` : `Skill **${name}** not found.`, ephemeral: true });
+  await interaction.reply({
+    content: removed ? `Skill **${name}** removed.` : `Skill **${name}** not found.`,
+    ephemeral: true,
+  });
 }
 
 async function handleProjectSkillList(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -251,10 +292,15 @@ async function handleProjectSkillList(interaction: ChatInputCommandInteraction):
   }
   const skills = projectMgr.getSkills(categoryId);
   if (skills.length === 0) {
-    await interaction.reply({ content: 'No skills defined. Use `/project skill-add`.', ephemeral: true });
+    await interaction.reply({
+      content: 'No skills defined. Use `/project skill-add`.',
+      ephemeral: true,
+    });
     return;
   }
-  const lines = skills.map(s => `**${s.name}**: ${s.prompt.slice(0, 80)}${s.prompt.length > 80 ? '…' : ''}`).join('\n');
+  const lines = skills
+    .map((s) => `**${s.name}**: ${s.prompt.slice(0, 80)}${s.prompt.length > 80 ? '…' : ''}`)
+    .join('\n');
   await interaction.reply({ content: `Skills:\n${lines}`, ephemeral: true });
 }
 
@@ -281,7 +327,10 @@ async function handleProjectSkillRun(interaction: ChatInputCommandInteraction): 
 
   const session = sessionMgr.getSessionByChannel(channel.id);
   if (!session) {
-    await interaction.reply({ content: 'Run this command inside an active agent session channel.', ephemeral: true });
+    await interaction.reply({
+      content: 'Run this command inside an active agent session channel.',
+      ephemeral: true,
+    });
     return;
   }
 
@@ -304,7 +353,10 @@ async function handleProjectMcpAdd(interaction: ChatInputCommandInteraction): Pr
   const name = interaction.options.getString('name', true);
   const command = interaction.options.getString('command', true);
   const argsRaw = interaction.options.getString('args') || '';
-  const args = argsRaw.split(',').map(item => item.trim()).filter(Boolean);
+  const args = argsRaw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
   await projectMgr.addMcpServer(categoryId, name, command, args);
   await interaction.reply({ content: `MCP server **${name}** added.`, ephemeral: true });
 }
@@ -317,7 +369,10 @@ async function handleProjectMcpRemove(interaction: ChatInputCommandInteraction):
   }
   const name = interaction.options.getString('name', true);
   const removed = await projectMgr.removeMcpServer(categoryId, name);
-  await interaction.reply({ content: removed ? `MCP server **${name}** removed.` : `MCP server **${name}** not found.`, ephemeral: true });
+  await interaction.reply({
+    content: removed ? `MCP server **${name}** removed.` : `MCP server **${name}** not found.`,
+    ephemeral: true,
+  });
 }
 
 async function handleProjectMcpList(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -331,7 +386,10 @@ async function handleProjectMcpList(interaction: ChatInputCommandInteraction): P
     await interaction.reply({ content: 'No MCP servers configured.', ephemeral: true });
     return;
   }
-  const lines = servers.map(server => `**${server.name}** — \`${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}\``);
+  const lines = servers.map(
+    (server) =>
+      `**${server.name}** — \`${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}\``,
+  );
   await interaction.reply({ content: `MCP servers:\n${lines.join('\n')}`, ephemeral: true });
 }
 
@@ -342,17 +400,28 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
   const sub = interaction.options.getSubcommand();
 
   switch (sub) {
-    case 'spawn': return handleAgentSpawn(interaction);
-    case 'list': return handleAgentList(interaction);
-    case 'stop': return handleAgentStop(interaction);
-    case 'end': return handleAgentEnd(interaction);
-    case 'archive': return handleAgentArchive(interaction);
-    case 'mode': return handleAgentMode(interaction);
-    case 'goal': return handleAgentGoal(interaction);
-    case 'persona': return handleAgentPersona(interaction);
-    case 'verbose': return handleAgentVerbose(interaction);
-    case 'model': return handleAgentModel(interaction);
-    case 'continue': return handleAgentContinue(interaction);
+    case 'spawn':
+      return handleAgentSpawn(interaction);
+    case 'list':
+      return handleAgentList(interaction);
+    case 'stop':
+      return handleAgentStop(interaction);
+    case 'end':
+      return handleAgentEnd(interaction);
+    case 'archive':
+      return handleAgentArchive(interaction);
+    case 'mode':
+      return handleAgentMode(interaction);
+    case 'goal':
+      return handleAgentGoal(interaction);
+    case 'persona':
+      return handleAgentPersona(interaction);
+    case 'verbose':
+      return handleAgentVerbose(interaction);
+    case 'model':
+      return handleAgentModel(interaction);
+    case 'continue':
+      return handleAgentContinue(interaction);
     default:
       await interaction.reply({ content: `Unknown subcommand: ${sub}`, ephemeral: true });
   }
@@ -361,26 +430,37 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
 async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promise<void> {
   // Must be in a TextChannel (not inside a thread)
   if (interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/agent spawn` in a project channel, not inside a thread.', ephemeral: true });
+    await interaction.reply({
+      content: 'Run `/agent spawn` in a project channel, not inside a thread.',
+      ephemeral: true,
+    });
     return;
   }
 
   const categoryId = (interaction.channel as TextChannel)?.parentId;
   if (!categoryId) {
-    await interaction.reply({ content: 'This channel is not under a Category. Run `/project setup` first.', ephemeral: true });
+    await interaction.reply({
+      content: 'This channel is not under a Category. Run `/project setup` first.',
+      ephemeral: true,
+    });
     return;
   }
 
   const project = projectMgr.getProject(categoryId);
   if (!project) {
-    await interaction.reply({ content: 'No project set up for this category. Run `/project setup` first.', ephemeral: true });
+    await interaction.reply({
+      content: 'No project set up for this category. Run `/project setup` first.',
+      ephemeral: true,
+    });
     return;
   }
 
   const label = interaction.options.getString('label', true);
-  const provider = (interaction.options.getString('provider') || config.defaultProvider) as ProviderName;
+  const provider = (interaction.options.getString('provider') ||
+    config.defaultProvider) as ProviderName;
   const mode = (interaction.options.getString('mode') || config.defaultMode) as SessionMode;
-  const claudePermissionMode = (interaction.options.getString('claude-permissions') || config.claudePermissionMode) as 'bypass' | 'normal';
+  const claudePermissionMode = (interaction.options.getString('claude-permissions') ||
+    config.claudePermissionMode) as 'bypass' | 'normal';
   const directory = interaction.options.getString('directory') || project.directory;
 
   await interaction.deferReply();
@@ -388,7 +468,10 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
   const guild = interaction.guild!;
 
   // Create a new TextChannel under the same category
-  const channelName = `${provider}-${label}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 100);
+  const channelName = `${provider}-${label}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .slice(0, 100);
   let sessionChannel: TextChannel;
   try {
     sessionChannel = await guild.channels.create({
@@ -439,10 +522,14 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     );
 
   if (provider === 'claude' && session.claudePermissionMode) {
-    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(mode, session.claudePermissionMode);
-    const permLabel = effectiveClaudePermissionMode === 'bypass'
-      ? '⚡ 绕过权限（完全自主）'
-      : '🛡️ 普通权限（需要确认）';
+    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(
+      mode,
+      session.claudePermissionMode,
+    );
+    const permLabel =
+      effectiveClaudePermissionMode === 'bypass'
+        ? '⚡ 绕过权限（完全自主）'
+        : '🛡️ 普通权限（需要确认）';
     welcomeEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
   }
 
@@ -463,15 +550,21 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     );
 
   if (provider === 'claude' && session.claudePermissionMode) {
-    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(mode, session.claudePermissionMode);
-    const permLabel = effectiveClaudePermissionMode === 'bypass'
-      ? '⚡ 绕过权限（完全自主）'
-      : '🛡️ 普通权限（需要确认）';
+    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(
+      mode,
+      session.claudePermissionMode,
+    );
+    const permLabel =
+      effectiveClaudePermissionMode === 'bypass'
+        ? '⚡ 绕过权限（完全自主）'
+        : '🛡️ 普通权限（需要确认）';
     embed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
   }
 
   await interaction.editReply({ embeds: [embed] });
-  log(`Agent "${label}" (${provider}) spawned by ${interaction.user.tag} in category ${categoryId}`);
+  log(
+    `Agent "${label}" (${provider}) spawned by ${interaction.user.tag} in category ${categoryId}`,
+  );
 }
 
 async function handleAgentList(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -481,14 +574,19 @@ async function handleAgentList(interaction: ChatInputCommandInteraction): Promis
     return;
   }
 
-  const sessions = sessionMgr.getSessionsByCategory(categoryId).filter(s => s.type === 'persistent');
+  const sessions = sessionMgr
+    .getSessionsByCategory(categoryId)
+    .filter((s) => s.type === 'persistent');
 
   if (sessions.length === 0) {
-    await interaction.reply({ content: 'No active agent sessions in this project.', ephemeral: true });
+    await interaction.reply({
+      content: 'No active agent sessions in this project.',
+      ephemeral: true,
+    });
     return;
   }
 
-  const lines = sessions.map(s => {
+  const lines = sessions.map((s) => {
     const status = s.isGenerating ? '🔄 Generating' : '💤 Idle';
     return `${status} | \`${s.agentLabel}\` | ${s.provider} | <#${s.channelId}> | ${formatRelative(s.lastActivity)}`;
   });
@@ -504,11 +602,17 @@ async function handleAgentList(interaction: ChatInputCommandInteraction): Promis
 async function handleAgentStop(interaction: ChatInputCommandInteraction): Promise<void> {
   const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No active session in this channel. Run this inside an agent session channel.', ephemeral: true });
+    await interaction.reply({
+      content: 'No active session in this channel. Run this inside an agent session channel.',
+      ephemeral: true,
+    });
     return;
   }
   const stopped = sessionMgr.abortSession(session.id);
-  await interaction.reply({ content: stopped ? 'Generation stopped.' : 'Agent was not generating.', ephemeral: true });
+  await interaction.reply({
+    content: stopped ? 'Generation stopped.' : 'Agent was not generating.',
+    ephemeral: true,
+  });
 }
 
 async function handleAgentEnd(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -526,11 +630,18 @@ async function handleAgentEnd(interaction: ChatInputCommandInteraction): Promise
     try {
       const ch = interaction.guild.channels.cache.get(session.channelId) as TextChannel | undefined;
       if (ch) await ch.delete(`Ended by ${interaction.user.tag}`);
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
   } else if (session.type === 'subagent' && interaction.channel?.isThread()) {
     try {
-      await (interaction.channel as AnyThreadChannel).setArchived(true, `Ended by ${interaction.user.tag}`);
-    } catch { /* best effort */ }
+      await (interaction.channel as AnyThreadChannel).setArchived(
+        true,
+        `Ended by ${interaction.user.tag}`,
+      );
+    } catch {
+      /* best effort */
+    }
   }
 
   await interaction.editReply('Agent session ended.').catch(() => {});
@@ -544,7 +655,10 @@ async function handleAgentArchive(interaction: ChatInputCommandInteraction): Pro
     return;
   }
   if (session.type !== 'persistent') {
-    await interaction.reply({ content: 'Only persistent sessions can be archived. Use `/agent end` for subagents.', ephemeral: true });
+    await interaction.reply({
+      content: 'Only persistent sessions can be archived. Use `/agent end` for subagents.',
+      ephemeral: true,
+    });
     return;
   }
   if (!interaction.guild) {
@@ -592,7 +706,10 @@ async function handleAgentPersona(interaction: ChatInputCommandInteraction): Pro
   }
   const persona = interaction.options.getString('name') || undefined;
   sessionMgr.setAgentPersona(session.id, persona === 'general' ? undefined : persona);
-  await interaction.reply({ content: `Persona set to **${persona || 'general'}**.`, ephemeral: true });
+  await interaction.reply({
+    content: `Persona set to **${persona || 'general'}**.`,
+    ephemeral: true,
+  });
 }
 
 async function handleAgentVerbose(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -603,7 +720,10 @@ async function handleAgentVerbose(interaction: ChatInputCommandInteraction): Pro
   }
   const newVerbose = !session.verbose;
   sessionMgr.setVerbose(session.id, newVerbose);
-  await interaction.reply({ content: `Verbose mode ${newVerbose ? 'enabled' : 'disabled'}.`, ephemeral: true });
+  await interaction.reply({
+    content: `Verbose mode ${newVerbose ? 'enabled' : 'disabled'}.`,
+    ephemeral: true,
+  });
 }
 
 async function handleAgentModel(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -644,8 +764,10 @@ export async function handleSubagent(interaction: ChatInputCommandInteraction): 
   const sub = interaction.options.getSubcommand();
 
   switch (sub) {
-    case 'run': return handleSubagentRun(interaction);
-    case 'list': return handleSubagentList(interaction);
+    case 'run':
+      return handleSubagentRun(interaction);
+    case 'list':
+      return handleSubagentList(interaction);
     default:
       await interaction.reply({ content: `Unknown subcommand: ${sub}`, ephemeral: true });
   }
@@ -654,13 +776,19 @@ export async function handleSubagent(interaction: ChatInputCommandInteraction): 
 async function handleSubagentRun(interaction: ChatInputCommandInteraction): Promise<void> {
   // Must be in a session TextChannel (not already a thread)
   if (interaction.channel?.isThread()) {
-    await interaction.reply({ content: 'Run `/subagent run` in an agent session channel, not inside a thread.', ephemeral: true });
+    await interaction.reply({
+      content: 'Run `/subagent run` in an agent session channel, not inside a thread.',
+      ephemeral: true,
+    });
     return;
   }
 
   const session = sessionMgr.getSessionByChannel(interaction.channelId);
   if (!session) {
-    await interaction.reply({ content: 'No active session in this channel. You must be in an agent session channel.', ephemeral: true });
+    await interaction.reply({
+      content: 'No active session in this channel. You must be in an agent session channel.',
+      ephemeral: true,
+    });
     return;
   }
 
@@ -706,7 +834,7 @@ async function handleSubagentList(interaction: ChatInputCommandInteraction): Pro
     return;
   }
 
-  const lines = subagents.map(s => {
+  const lines = subagents.map((s) => {
     const status = s.isGenerating ? '🔄' : '💤';
     return `${status} \`${s.agentLabel}\` | <#${s.channelId}> | depth: ${s.subagentDepth}`;
   });
@@ -719,23 +847,31 @@ async function handleSubagentList(interaction: ChatInputCommandInteraction): Pro
 export async function handleShell(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!config.shellEnabled) {
     await interaction.reply({
-      content: 'Shell execution is disabled. Enable it with `threadcord config set SHELL_ENABLED true` and set SHELL_ALLOWED_USERS.',
+      content:
+        'Shell execution is disabled. Enable it with `threadcord config set SHELL_ENABLED true` and set SHELL_ALLOWED_USERS.',
       ephemeral: true,
     });
     return;
   }
   if (!assertUserAllowed(interaction)) return;
-  const allowedByShellList = config.shellAllowedUsers.length === 0 || config.shellAllowedUsers.includes(interaction.user.id);
+  const allowedByShellList =
+    config.shellAllowedUsers.length === 0 || config.shellAllowedUsers.includes(interaction.user.id);
   if (!allowedByShellList) {
-    await interaction.reply({ content: 'You are not authorized for shell access.', ephemeral: true });
+    await interaction.reply({
+      content: 'You are not authorized for shell access.',
+      ephemeral: true,
+    });
     return;
   }
   const sub = interaction.options.getSubcommand();
 
   switch (sub) {
-    case 'run': return handleShellRun(interaction);
-    case 'processes': return handleShellProcesses(interaction);
-    case 'kill': return handleShellKill(interaction);
+    case 'run':
+      return handleShellRun(interaction);
+    case 'processes':
+      return handleShellProcesses(interaction);
+    case 'kill':
+      return handleShellKill(interaction);
     default:
       await interaction.reply({ content: `Unknown subcommand: ${sub}`, ephemeral: true });
   }
@@ -774,14 +910,19 @@ async function handleShellProcesses(interaction: ChatInputCommandInteraction): P
     await interaction.reply({ content: 'No running shell processes.', ephemeral: true });
     return;
   }
-  const lines = procs.map(p => `**PID ${p.pid}** — \`${p.command}\` (${formatUptime(p.startedAt)})`);
+  const lines = procs.map(
+    (p) => `**PID ${p.pid}** — \`${p.command}\` (${formatUptime(p.startedAt)})`,
+  );
   await interaction.reply({ content: `Running processes:\n${lines.join('\n')}`, ephemeral: true });
 }
 
 async function handleShellKill(interaction: ChatInputCommandInteraction): Promise<void> {
   const pid = interaction.options.getInteger('pid', true);
   const killed = killProcess(pid);
-  await interaction.reply({ content: killed ? `Process ${pid} killed.` : `Process ${pid} not found.`, ephemeral: true });
+  await interaction.reply({
+    content: killed ? `Process ${pid} killed.` : `Process ${pid} not found.`,
+    ephemeral: true,
+  });
 }
 
 // ── 快捷命令处理器 ────────────────────────────────────────────────────

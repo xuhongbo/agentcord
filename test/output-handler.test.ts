@@ -44,7 +44,7 @@ async function* streamEvents(events: ProviderEvent[]): AsyncGenerator<ProviderEv
 
 function collectSentText(channel: ReturnType<typeof createFakeChannel>): string {
   return channel.sent
-    .map(payload => typeof payload === 'string' ? payload : payload?.content ?? '')
+    .map((payload) => (typeof payload === 'string' ? payload : (payload?.content ?? '')))
     .filter(Boolean)
     .join('');
 }

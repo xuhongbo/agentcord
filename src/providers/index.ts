@@ -47,7 +47,9 @@ export async function ensureProvider(name: ProviderName): Promise<Provider> {
   }
 
   if (name === 'codex') {
-    throw new Error('Codex provider is unavailable. Install @openai/codex-sdk and restart threadcord.');
+    throw new Error(
+      'Codex provider is unavailable. Install @openai/codex-sdk and restart threadcord.',
+    );
   }
 
   throw new Error(`Unknown provider: ${name}`);

@@ -34,7 +34,9 @@ describe('project-registry', () => {
   it('rejects duplicate path and duplicate name', async () => {
     await registerProject('demo', '/tmp/demo');
     await expect(registerProject('demo2', '/tmp/demo')).rejects.toThrow(/Path already registered/);
-    await expect(registerProject('demo', '/tmp/another')).rejects.toThrow(/Project name already exists/);
+    await expect(registerProject('demo', '/tmp/another')).rejects.toThrow(
+      /Project name already exists/,
+    );
   });
 
   it('renames and removes project', async () => {

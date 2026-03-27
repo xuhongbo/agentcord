@@ -139,10 +139,15 @@ export function executeSkill(categoryId: string, name: string, input?: string): 
   return input ? template.replace(/\{input\}/g, input) : template.replace(/\{input\}/g, '');
 }
 
-export async function addMcpServer(categoryId: string, serverName: string, command: string, args?: string[]): Promise<void> {
+export async function addMcpServer(
+  categoryId: string,
+  serverName: string,
+  command: string,
+  args?: string[],
+): Promise<void> {
   const project = getRegisteredProjectByCategoryId(categoryId);
   if (!project) return;
-  const existing = project.mcpServers.findIndex(server => server.name === serverName);
+  const existing = project.mcpServers.findIndex((server) => server.name === serverName);
   const server: McpServer = {
     name: serverName,
     command,
@@ -160,7 +165,7 @@ export async function addMcpServer(categoryId: string, serverName: string, comma
 export async function removeMcpServer(categoryId: string, serverName: string): Promise<boolean> {
   const project = getRegisteredProjectByCategoryId(categoryId);
   if (!project) return false;
-  const index = project.mcpServers.findIndex(server => server.name === serverName);
+  const index = project.mcpServers.findIndex((server) => server.name === serverName);
   if (index < 0) return false;
   project.mcpServers.splice(index, 1);
   await updateProject(project);

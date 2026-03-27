@@ -105,14 +105,19 @@ function makeInteraction(
   };
 }
 
-function step(report: IntegrationReport, name: string, status: StepResult['status'], detail: string) {
+function step(
+  report: IntegrationReport,
+  name: string,
+  status: StepResult['status'],
+  detail: string,
+) {
   report.steps.push({ name, status, detail });
   const icon = status === 'passed' ? '✓' : status === 'skipped' ? '-' : '✗';
   process.stdout.write(`${icon} ${name}: ${detail}\n`);
 }
 
 async function waitFor(ms: number): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -231,7 +236,7 @@ try {
   await handleAgent(spawnInteraction as any);
 
   const mainSession = getSessionsByCategory(category.id).find(
-    session => session.type === 'persistent' && session.agentLabel === mainLabel,
+    (session) => session.type === 'persistent' && session.agentLabel === mainLabel,
   );
   if (!mainSession) {
     throw new Error('主会话未创建成功');
@@ -239,7 +244,7 @@ try {
   report.mainSessionChannelId = mainSession.channelId;
   step(report, 'agent-spawn', 'passed', `创建主代理会话 ${mainLabel}`);
 
-  const mainChannel = await guild.channels.fetch(mainSession.channelId) as TextChannel;
+  const mainChannel = (await guild.channels.fetch(mainSession.channelId)) as TextChannel;
 
   const subLabel = `e2e-sub-${Date.now().toString().slice(-4)}`;
   const subInteraction = makeInteraction(actorId, actorTag, guild, mainChannel, 'run', {
@@ -249,7 +254,7 @@ try {
   await handleSubagent(subInteraction as any);
 
   const subagent = getSessionsByCategory(category.id).find(
-    session => session.type === 'subagent' && session.agentLabel === subLabel,
+    (session) => session.type === 'subagent' && session.agentLabel === subLabel,
   );
   if (!subagent) {
     throw new Error('子代理未创建成功');
@@ -257,17 +262,32 @@ try {
   report.subagentThreadId = subagent.channelId;
   step(report, 'subagent-run', 'passed', `创建子代理线程 ${subLabel}`);
 
-  await withTimeout(executeShellCommand('pwd', mountedProject.path, mainChannel), 15000, 'shell-smoke');
+  await withTimeout(
+    executeShellCommand('pwd', mountedProject.path, mainChannel),
+    15000,
+    'shell-smoke',
+  );
   step(report, 'shell-smoke', 'passed', '主会话频道成功执行 pwd');
 
   const claudeCapable = Boolean(config.anthropicApiKey);
   const codexCapable = Boolean(config.codexApiKey);
   if (!claudeCapable) {
-    report.missingInputs.push('若要自动验证 Claude 真正出流，请提供 ANTHROPIC_API_KEY 或全局配置中的同名键');
-    step(report, 'provider-claude-smoke', 'skipped', '未配置 ANTHROPIC_API_KEY，跳过真实 Claude 生成测试');
+    report.missingInputs.push(
+      '若要自动验证 Claude 真正出流，请提供 ANTHROPIC_API_KEY 或全局配置中的同名键',
+    );
+    step(
+      report,
+      'provider-claude-smoke',
+      'skipped',
+      '未配置 ANTHROPIC_API_KEY，跳过真实 Claude 生成测试',
+    );
   } else {
     await withTimeout(
-      executeSessionPrompt(getSession(mainSession.id)!, mainChannel, 'Reply with exactly: THREADCORD_E2E_OK'),
+      executeSessionPrompt(
+        getSession(mainSession.id)!,
+        mainChannel,
+        'Reply with exactly: THREADCORD_E2E_OK',
+      ),
       60000,
       'provider-claude-smoke',
     );
@@ -275,10 +295,22 @@ try {
   }
 
   if (!codexCapable) {
-    report.missingInputs.push('若要自动验证 Codex 真正出流，请提供 CODEX_API_KEY 或全局配置中的同名键');
-    step(report, 'provider-codex-smoke', 'skipped', '未配置 CODEX_API_KEY，跳过真实 Codex 生成测试');
+    report.missingInputs.push(
+      '若要自动验证 Codex 真正出流，请提供 CODEX_API_KEY 或全局配置中的同名键',
+    );
+    step(
+      report,
+      'provider-codex-smoke',
+      'skipped',
+      '未配置 CODEX_API_KEY，跳过真实 Codex 生成测试',
+    );
   } else {
-    step(report, 'provider-codex-smoke', 'passed', '已检测到 CODEX_API_KEY，可在下一轮扩展 Codex 真正出流测试');
+    step(
+      report,
+      'provider-codex-smoke',
+      'passed',
+      '已检测到 CODEX_API_KEY，可在下一轮扩展 Codex 真正出流测试',
+    );
   }
 
   const archivedBefore = getArchivedSessions(category.id).length;
@@ -302,7 +334,9 @@ try {
 } catch (err: unknown) {
   const message = (err as Error).message || 'unknown error';
   if (message.includes('Missing Permissions')) {
-    report.missingInputs.push('机器人在目标 guild 中缺少频道管理相关权限；至少需要创建 Category、TextChannel、Forum、Thread、删除频道与发送消息的权限');
+    report.missingInputs.push(
+      '机器人在目标 guild 中缺少频道管理相关权限；至少需要创建 Category、TextChannel、Forum、Thread、删除频道与发送消息的权限',
+    );
   }
   step(report, 'integration', 'failed', message);
 } finally {
@@ -332,6 +366,6 @@ try {
         process.stdout.write(`- ${item}\n`);
       }
     }
-    process.exit(report.steps.some(item => item.status === 'failed') ? 1 : 0);
+    process.exit(report.steps.some((item) => item.status === 'failed') ? 1 : 0);
   }
 }

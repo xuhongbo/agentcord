@@ -13,7 +13,13 @@ import {
 type SessionChannel = TextChannel | AnyThreadChannel;
 import { existsSync } from 'node:fs';
 import type { ProviderEvent, ProviderName } from './providers/types.ts';
-import { splitMessage, truncate, detectNumberedOptions, detectYesNoPrompt, isAbortError } from './utils.ts';
+import {
+  splitMessage,
+  truncate,
+  detectNumberedOptions,
+  detectYesNoPrompt,
+  isAbortError,
+} from './utils.ts';
 import type { ExpandableContent } from './types.ts';
 import {
   renderCommandExecutionEmbed,
@@ -52,13 +58,16 @@ export function getQuestionCount(sessionId: string): number {
 }
 
 // Clean up expired expandable content every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  const TTL = 10 * 60 * 1000;
-  for (const [key, val] of expandableStore) {
-    if (now - val.createdAt > TTL) expandableStore.delete(key);
-  }
-}, 5 * 60 * 1000);
+setInterval(
+  () => {
+    const now = Date.now();
+    const TTL = 10 * 60 * 1000;
+    for (const [key, val] of expandableStore) {
+      if (now - val.createdAt > TTL) expandableStore.delete(key);
+    }
+  },
+  5 * 60 * 1000,
+);
 
 export function getExpandableContent(id: string): string | undefined {
   return expandableStore.get(id)?.content;
@@ -79,7 +88,10 @@ function makeStopButton(sessionId: string): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-function makeOptionButtons(sessionId: string, options: string[]): ActionRowBuilder<ButtonBuilder>[] {
+function makeOptionButtons(
+  sessionId: string,
+  options: string[],
+): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   const maxOptions = Math.min(options.length, 10);
   for (let i = 0; i < maxOptions; i += 5) {
@@ -98,7 +110,11 @@ function makeOptionButtons(sessionId: string, options: string[]): ActionRowBuild
   return rows;
 }
 
-export function makeModeButtons(sessionId: string, currentMode: string, claudePermissionMode?: 'bypass' | 'normal'): ActionRowBuilder<ButtonBuilder> {
+export function makeModeButtons(
+  sessionId: string,
+  currentMode: string,
+  claudePermissionMode?: 'bypass' | 'normal',
+): ActionRowBuilder<ButtonBuilder> {
   const modes = [
     { id: 'auto', label: '⚡ 自动模式' },
     { id: 'plan', label: '📋 计划模式' },
@@ -118,14 +134,19 @@ export function makeModeButtons(sessionId: string, currentMode: string, claudePe
   }
 
   // Add Claude permission mode indicator if applicable
-  const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(currentMode, claudePermissionMode);
+  const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(
+    currentMode,
+    claudePermissionMode,
+  );
   if (effectiveClaudePermissionMode) {
     const permLabel = effectiveClaudePermissionMode === 'bypass' ? '⚡ 绕过权限' : '🛡️ 需要确认';
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`perm-info:${sessionId}`)
         .setLabel(permLabel)
-        .setStyle(effectiveClaudePermissionMode === 'bypass' ? ButtonStyle.Danger : ButtonStyle.Success)
+        .setStyle(
+          effectiveClaudePermissionMode === 'bypass' ? ButtonStyle.Danger : ButtonStyle.Success,
+        )
         .setDisabled(true),
     );
   }
@@ -209,7 +230,10 @@ function renderTaskListEmbed(resultText: string): EmbedBuilder | null {
 function renderAskUserQuestion(
   questionsJson: string,
   sessionId: string,
-): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] } | null {
+): {
+  embeds: EmbedBuilder[];
+  components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[];
+} | null {
   try {
     const data = JSON.parse(questionsJson);
     const questions: Array<{
@@ -264,7 +288,7 @@ function renderAskUserQuestion(
           components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
         }
         const optionLines = q.options
-          .map(o => o.description ? `**${o.label}** — ${o.description}` : `**${o.label}**`)
+          .map((o) => (o.description ? `**${o.label}** — ${o.description}` : `**${o.label}**`))
           .join('\n');
         embed.addFields({ name: 'Options', value: truncate(optionLines, 1000) });
       }
@@ -293,7 +317,7 @@ function renderAskUserQuestion(
  */
 function detectRepetition(text: string): { isRepetitive: boolean; cleanedText: string } {
   // Split by sentence-ending punctuation
-  const sentences = text.split(/[。！？\n]+/).filter(s => s.trim().length > 5);
+  const sentences = text.split(/[。！？\n]+/).filter((s) => s.trim().length > 5);
   if (sentences.length < 3) return { isRepetitive: false, cleanedText: text };
 
   // Count sentence frequencies
@@ -375,7 +399,11 @@ class MessageStreamer {
 
       if (chunks.length > 1) {
         if (this.currentMessage) {
-          try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
+          try {
+            await this.currentMessage.edit({ content: chunks[0], components: [] });
+          } catch {
+            /* deleted */
+          }
           this.currentMessage = null;
           for (let i = 1; i < chunks.length - 1; i++) {
             await this.channel.send(chunks[i]);
@@ -393,7 +421,9 @@ class MessageStreamer {
             content: lastChunk,
             components: [makeStopButton(this.sessionId)],
           });
-        } catch { /* deleted */ }
+        } catch {
+          /* deleted */
+        }
       } else {
         this.currentMessage = await this.channel.send({
           content: lastChunk,
@@ -407,8 +437,13 @@ class MessageStreamer {
   }
 
   async finalize(): Promise<void> {
-    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    while (this.flushing) { await new Promise(r => setTimeout(r, 50)); }
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    while (this.flushing) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     if (this.dirty) {
       this.dirty = false;
@@ -419,9 +454,15 @@ class MessageStreamer {
       const lastChunk = chunks[chunks.length - 1];
 
       if (chunks.length > 1 && this.currentMessage) {
-        try { await this.currentMessage.edit({ content: chunks[0], components: [] }); } catch { /* deleted */ }
+        try {
+          await this.currentMessage.edit({ content: chunks[0], components: [] });
+        } catch {
+          /* deleted */
+        }
         this.currentMessage = null;
-        for (let i = 1; i < chunks.length - 1; i++) { await this.channel.send(chunks[i]); }
+        for (let i = 1; i < chunks.length - 1; i++) {
+          await this.channel.send(chunks[i]);
+        }
       } else if (chunks.length > 1) {
         for (let i = 0; i < chunks.length - 1; i++) {
           await this.channel.send(chunks[i]);
@@ -429,7 +470,11 @@ class MessageStreamer {
       }
 
       if (this.currentMessage) {
-        try { await this.currentMessage.edit({ content: lastChunk, components: [] }); } catch { /* deleted */ }
+        try {
+          await this.currentMessage.edit({ content: lastChunk, components: [] });
+        } catch {
+          /* deleted */
+        }
       } else if (lastChunk) {
         this.currentMessage = await this.channel.send({ content: lastChunk });
       }
@@ -439,7 +484,9 @@ class MessageStreamer {
           content: this.currentMessage.content || '',
           components: [],
         });
-      } catch { /* deleted */ }
+      } catch {
+        /* deleted */
+      }
     }
 
     this.currentMessage = null;
@@ -447,20 +494,34 @@ class MessageStreamer {
   }
 
   async discard(): Promise<void> {
-    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    while (this.flushing) { await new Promise(r => setTimeout(r, 50)); }
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    while (this.flushing) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     if (this.currentMessage) {
-      try { await this.currentMessage.delete(); } catch { /* already deleted */ }
+      try {
+        await this.currentMessage.delete();
+      } catch {
+        /* already deleted */
+      }
       this.currentMessage = null;
     }
     this.currentText = '';
     this.dirty = false;
   }
 
-  getText(): string { return this.transcriptText; }
+  getText(): string {
+    return this.transcriptText;
+  }
 
   destroy(): void {
-    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
   }
 }
 
@@ -559,7 +620,8 @@ export async function handleOutputStream(
 
         case 'task_done': {
           await streamer.finalize();
-          const statusEmoji = event.status === 'completed' ? '✅' : event.status === 'failed' ? '❌' : '⏹️';
+          const statusEmoji =
+            event.status === 'completed' ? '✅' : event.status === 'failed' ? '❌' : '⏹️';
           const embed = new EmbedBuilder()
             .setColor(event.status === 'completed' ? 0x2ecc71 : 0xe74c3c)
             .setTitle(`${statusEmoji} Subagent ${event.status}`)
@@ -583,9 +645,8 @@ export async function handleOutputStream(
         case 'tool_start': {
           await streamer.finalize();
           if (verbose) {
-            const displayInput = event.toolInput.length > 1000
-              ? truncate(event.toolInput, 1000)
-              : event.toolInput;
+            const displayInput =
+              event.toolInput.length > 1000 ? truncate(event.toolInput, 1000) : event.toolInput;
             const embed = new EmbedBuilder()
               .setColor(0x3498db)
               .setTitle(`Tool: ${event.toolName}`)
@@ -609,8 +670,8 @@ export async function handleOutputStream(
         }
 
         case 'tool_result': {
-          const isTaskResult = lastToolName !== null &&
-            (lastToolName === 'TaskList' || lastToolName === 'TaskGet');
+          const isTaskResult =
+            lastToolName !== null && (lastToolName === 'TaskList' || lastToolName === 'TaskGet');
           const showResult = verbose || isTaskResult;
           if (!showResult) break;
 
@@ -621,9 +682,8 @@ export async function handleOutputStream(
               await channel.send({ embeds: [boardEmbed], components: [makeStopButton(sessionId)] });
             }
           } else if (event.result) {
-            const displayResult = event.result.length > 1000
-              ? truncate(event.result, 1000)
-              : event.result;
+            const displayResult =
+              event.result.length > 1000 ? truncate(event.result, 1000) : event.result;
             const embed = new EmbedBuilder()
               .setColor(0x1abc9c)
               .setTitle('Tool Result')
@@ -698,9 +758,17 @@ export async function handleOutputStream(
           success = event.success;
           const lastText = streamer.getText();
           const cost = event.costUsd.toFixed(4);
-          const duration = event.durationMs ? `${(event.durationMs / 1000).toFixed(1)}s` : 'unknown';
+          const duration = event.durationMs
+            ? `${(event.durationMs / 1000).toFixed(1)}s`
+            : 'unknown';
           const turns = event.numTurns || 0;
-          const modeLabel = ({ auto: 'Auto', plan: 'Plan', normal: 'Normal', monitor: 'Monitor' } as Record<string, string>)[mode] || 'Auto';
+          const modeLabel =
+            (
+              { auto: 'Auto', plan: 'Plan', normal: 'Normal', monitor: 'Monitor' } as Record<
+                string,
+                string
+              >
+            )[mode] || 'Auto';
           const statusLine = event.success
             ? `-# $${cost} | ${duration} | ${turns} turns | ${modeLabel}`
             : `-# Error | $${cost} | ${duration} | ${turns} turns`;
@@ -711,7 +779,10 @@ export async function handleOutputStream(
           }
           await streamer.finalize();
 
-          const components: (ActionRowBuilder<ButtonBuilder> | ActionRowBuilder<StringSelectMenuBuilder>)[] = [];
+          const components: (
+            | ActionRowBuilder<ButtonBuilder>
+            | ActionRowBuilder<StringSelectMenuBuilder>
+          )[] = [];
           const checkText = lastText || '';
           const opts = detectNumberedOptions(checkText);
           if (opts) {

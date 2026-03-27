@@ -82,7 +82,7 @@ Prioritize reliability and automation.`,
 ];
 
 export function getAgent(name: string): AgentPersona | undefined {
-  return agents.find(a => a.name === name);
+  return agents.find((a) => a.name === name);
 }
 
 export function listAgents(): AgentPersona[] {

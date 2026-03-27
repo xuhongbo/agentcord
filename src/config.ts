@@ -20,7 +20,10 @@ function optional(key: string, fallback: string): string {
 function optionalList(key: string, fallback: string[] = []): string[] {
   const value = getConfigValue(key);
   if (!value) return fallback;
-  return value.split(',').map(item => item.trim()).filter(Boolean);
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function optionalInt(key: string, fallback: number): number {
@@ -60,11 +63,24 @@ export const config = {
   shellEnabled: optionalBool('SHELL_ENABLED', false),
   shellAllowedUsers: optionalList('SHELL_ALLOWED_USERS'),
 
-  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as 'read-only' | 'workspace-write' | 'danger-full-access',
-  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as 'never' | 'on-request' | 'on-failure' | 'untrusted',
+  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as
+    | 'read-only'
+    | 'workspace-write'
+    | 'danger-full-access',
+  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as
+    | 'never'
+    | 'on-request'
+    | 'on-failure'
+    | 'untrusted',
   codexNetworkAccessEnabled: optionalBool('CODEX_NETWORK_ACCESS_ENABLED', false),
   codexWebSearchMode: optional('CODEX_WEB_SEARCH', 'disabled') as 'disabled' | 'cached' | 'live',
-  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '',
+  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as
+    | 'minimal'
+    | 'low'
+    | 'medium'
+    | 'high'
+    | 'xhigh'
+    | '',
   codexBaseUrl: optional('CODEX_BASE_URL', ''),
   codexApiKey: optional('CODEX_API_KEY', ''),
   codexPath: optional('CODEX_PATH', ''),

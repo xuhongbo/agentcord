@@ -40,7 +40,9 @@ export async function handleProject(args: string[]): Promise<void> {
       console.log(`✓ Project mounted: ${project.name}`);
       console.log(`  Path: ${project.path}`);
       if (project.discordCategoryId) {
-        console.log(`  Bound Discord category: ${project.discordCategoryName ?? project.discordCategoryId}`);
+        console.log(
+          `  Bound Discord category: ${project.discordCategoryName ?? project.discordCategoryId}`,
+        );
       } else {
         console.log('  Discord binding: pending (`/project setup` in Discord)');
       }

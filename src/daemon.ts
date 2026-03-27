@@ -28,21 +28,30 @@ function getCliPath(): string {
       try {
         const wrapper = readFileSync(result, 'utf-8');
         // Match patterns like: exec node "$basedir/../../path/to/cli.js"
-        const match = wrapper.match(/exec\s+(?:node|"\$basedir\/node")\s+"?\$basedir\/([^"$\s]+cli\.js)"?/);
+        const match = wrapper.match(
+          /exec\s+(?:node|"\$basedir\/node")\s+"?\$basedir\/([^"$\s]+cli\.js)"?/,
+        );
         if (match) {
           // Resolve relative paths against the wrapper's directory
           const wrapperDir = execSync(`dirname "${result}"`, { encoding: 'utf-8' }).trim();
           const resolved = resolve(wrapperDir, match[1]);
           if (existsSync(resolved)) return resolved;
         }
-      } catch { /* not a shell wrapper */ }
+      } catch {
+        /* not a shell wrapper */
+      }
 
       // Try resolving as symlink
-      const realPath = execSync(`readlink -f "${result}" 2>/dev/null || realpath "${result}" 2>/dev/null || echo "${result}"`, { encoding: 'utf-8' }).trim();
+      const realPath = execSync(
+        `readlink -f "${result}" 2>/dev/null || realpath "${result}" 2>/dev/null || echo "${result}"`,
+        { encoding: 'utf-8' },
+      ).trim();
       // If it resolved to a .js file, use it directly
       if (realPath.endsWith('.js') && existsSync(realPath)) return realPath;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Fallback: use the dist/cli.js relative to this file
   return resolve(import.meta.dirname!, '..', 'dist', 'cli.js');
@@ -119,7 +128,11 @@ async function install(): Promise<void> {
 
     // Unload existing if present
     if (existsSync(plistPath)) {
-      try { execSync(`launchctl unload "${plistPath}" 2>/dev/null`); } catch { /* ignore */ }
+      try {
+        execSync(`launchctl unload "${plistPath}" 2>/dev/null`);
+      } catch {
+        /* ignore */
+      }
     }
 
     const plist = generateMacPlist(workDir, logDir);
@@ -159,7 +172,11 @@ async function uninstall(): Promise<void> {
       p.log.warn('No LaunchAgent found. Nothing to uninstall.');
       return;
     }
-    try { execSync(`launchctl unload "${plistPath}"`); } catch { /* ignore */ }
+    try {
+      execSync(`launchctl unload "${plistPath}"`);
+    } catch {
+      /* ignore */
+    }
     unlinkSync(plistPath);
     p.log.success('LaunchAgent uninstalled.');
   } else {
@@ -171,7 +188,9 @@ async function uninstall(): Promise<void> {
     try {
       execSync(`systemctl --user stop ${SERVICE_NAME}`);
       execSync(`systemctl --user disable ${SERVICE_NAME}`);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     unlinkSync(servicePath);
     execSync('systemctl --user daemon-reload');
     p.log.success('systemd user service uninstalled.');
@@ -210,16 +229,22 @@ async function status(): Promise<void> {
       const plist = readFileSync(plistPath, 'utf-8');
       const match = plist.match(/<key>WorkingDirectory<\/key>\s*<string>(.+?)<\/string>/);
       if (match) p.log.info(`Directory: ${match[1]}`);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   } else {
     try {
-      const output = execSync(`systemctl --user is-active ${SERVICE_NAME}`, { encoding: 'utf-8' }).trim();
+      const output = execSync(`systemctl --user is-active ${SERVICE_NAME}`, {
+        encoding: 'utf-8',
+      }).trim();
       if (output === 'active') {
         p.log.success('Running');
       } else {
         p.log.warn(`Status: ${output}`);
       }
-      const statusOutput = execSync(`systemctl --user status ${SERVICE_NAME} --no-pager -l`, { encoding: 'utf-8' });
+      const statusOutput = execSync(`systemctl --user status ${SERVICE_NAME} --no-pager -l`, {
+        encoding: 'utf-8',
+      });
       console.log(statusOutput);
     } catch (err: unknown) {
       const servicePath = getLinuxServicePath();

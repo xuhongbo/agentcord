@@ -33,16 +33,16 @@ export async function loadRegistry(): Promise<void> {
 }
 
 export function getProjectByName(name: string): RegisteredProject | undefined {
-  return projects.find(project => project.name === name);
+  return projects.find((project) => project.name === name);
 }
 
 export function getProjectByPath(path: string): RegisteredProject | undefined {
   const normalized = normalizePath(path);
-  return projects.find(project => normalizePath(project.path) === normalized);
+  return projects.find((project) => normalizePath(project.path) === normalized);
 }
 
 export function getProjectByCategoryId(categoryId: string): RegisteredProject | undefined {
-  return projects.find(project => project.discordCategoryId === categoryId);
+  return projects.find((project) => project.discordCategoryId === categoryId);
 }
 
 export function getAllRegisteredProjects(): RegisteredProject[] {
@@ -92,7 +92,7 @@ export async function renameProject(oldName: string, newName: string): Promise<v
 
 export async function removeProject(name: string): Promise<void> {
   const before = projects.length;
-  projects = projects.filter(project => project.name !== name);
+  projects = projects.filter((project) => project.name !== name);
   if (projects.length === before) throw new Error(`Project not found: ${name}`);
   await saveRegistry();
 }
@@ -126,7 +126,10 @@ export async function unbindProjectCategory(name: string): Promise<void> {
   await saveRegistry();
 }
 
-export async function setProjectHistoryChannel(name: string, historyChannelId: string): Promise<void> {
+export async function setProjectHistoryChannel(
+  name: string,
+  historyChannelId: string,
+): Promise<void> {
   const project = getProjectByName(name);
   if (!project) throw new Error(`Project not found: ${name}`);
   project.historyChannelId = historyChannelId;
@@ -135,7 +138,7 @@ export async function setProjectHistoryChannel(name: string, historyChannelId: s
 }
 
 export async function updateProject(project: RegisteredProject): Promise<void> {
-  const index = projects.findIndex(item => item.name === project.name);
+  const index = projects.findIndex((item) => item.name === project.name);
   if (index < 0) throw new Error(`Project not found: ${project.name}`);
   projects[index] = { ...project, updatedAt: Date.now() };
   await saveRegistry();

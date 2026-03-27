@@ -22,18 +22,22 @@ await loadRegistry();
 await loadSessions();
 
 const projects = getAllRegisteredProjects();
-const boundProjects = projects.filter(project => project.discordCategoryId);
+const boundProjects = projects.filter((project) => project.discordCategoryId);
 
-let discoveredClaude: Array<{ project: string; sessionId: string; summary?: string }> = [];
+const discoveredClaude: Array<{ project: string; sessionId: string; summary?: string }> = [];
 try {
   const claudeSdk = await import('@anthropic-ai/claude-agent-sdk');
   for (const project of projects) {
     try {
-      const sessions = await withTimeout(claudeSdk.listSessions({ dir: project.path, limit: 20 }), 10000, `claude-listSessions:${project.name}`);
+      const sessions = await withTimeout(
+        claudeSdk.listSessions({ dir: project.path, limit: 20 }),
+        10000,
+        `claude-listSessions:${project.name}`,
+      );
       discoveredClaude.push(
         ...sessions
-          .filter(item => item?.sessionId)
-          .map(item => ({
+          .filter((item) => item?.sessionId)
+          .map((item) => ({
             project: project.name,
             sessionId: item.sessionId,
             summary: item.summary || item.firstPrompt,
@@ -47,24 +51,26 @@ try {
   // sdk unavailable
 }
 
-const discoveredCodex = listCodexSessionsForProjects(projects.map(project => project.path)).map(item => ({
-  projectPath: item.projectPath,
-  sessionId: item.id,
-  threadName: item.threadName,
-  cwd: item.cwd,
-}));
+const discoveredCodex = listCodexSessionsForProjects(projects.map((project) => project.path)).map(
+  (item) => ({
+    projectPath: item.projectPath,
+    sessionId: item.id,
+    threadName: item.threadName,
+    cwd: item.cwd,
+  }),
+);
 
 const before = getAllSessions().length;
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 await client.login(config.token);
 startSync(client);
-await new Promise(resolve => setTimeout(resolve, 5000));
+await new Promise((resolve) => setTimeout(resolve, 5000));
 stopSync();
 const after = getAllSessions().length;
 client.destroy();
 
 const report = {
-  projects: projects.map(project => ({
+  projects: projects.map((project) => ({
     name: project.name,
     path: project.path,
     discordCategoryId: project.discordCategoryId || null,

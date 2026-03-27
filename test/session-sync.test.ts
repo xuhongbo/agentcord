@@ -65,7 +65,7 @@ describe('session-sync', () => {
     const guild = {
       channels: {
         cache: {
-          get: vi.fn((id: string) => id === 'cat-1' ? category : undefined),
+          get: vi.fn((id: string) => (id === 'cat-1' ? category : undefined)),
         },
         create: vi.fn().mockResolvedValue({ id: 'channel-1' }),
       },
@@ -80,11 +80,13 @@ describe('session-sync', () => {
     };
 
     startSync(client as any);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     stopSync();
 
-    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
-      directory: '/repo/packages/app',
-    }));
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directory: '/repo/packages/app',
+      }),
+    );
   });
 });

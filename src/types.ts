@@ -16,22 +16,22 @@ export type ThreadType = SessionType;
 export type ClaudePermissionMode = 'bypass' | 'normal';
 
 export interface ThreadSession {
-  id: string;                    // Internal session ID (sanitized agentLabel + dedup suffix)
-  channelId: string;             // Primary Discord ID: TextChannel.id for persistent, Thread.id for subagent
-  categoryId: string;            // Discord Category ID (= project)
-  projectName: string;           // Project name
-  agentLabel: string;            // Human-readable label, e.g. "fix-login"
+  id: string; // Internal session ID (sanitized agentLabel + dedup suffix)
+  channelId: string; // Primary Discord ID: TextChannel.id for persistent, Thread.id for subagent
+  categoryId: string; // Discord Category ID (= project)
+  projectName: string; // Project name
+  agentLabel: string; // Human-readable label, e.g. "fix-login"
   provider: ProviderName;
-  providerSessionId?: string;    // Provider-side session ID for resumption
+  providerSessionId?: string; // Provider-side session ID for resumption
   model?: string;
   type: SessionType;
-  parentChannelId?: string;      // For subagents: parent session's TextChannel ID
-  subagentDepth: number;         // Chain depth (0 = top-level)
-  directory: string;             // Working directory on host machine
+  parentChannelId?: string; // For subagents: parent session's TextChannel ID
+  subagentDepth: number; // Chain depth (0 = top-level)
+  directory: string; // Working directory on host machine
   mode: SessionMode;
-  agentPersona?: string;         // Agent persona name
-  verbose: boolean;              // Show tool calls in Discord
-  claudePermissionMode?: ClaudePermissionMode;  // Claude-specific permission mode
+  agentPersona?: string; // Agent persona name
+  verbose: boolean; // Show tool calls in Discord
+  claudePermissionMode?: ClaudePermissionMode; // Claude-specific permission mode
   monitorGoal?: string;
   monitorProviderSessionId?: string;
   workflowState: SessionWorkflowState;
@@ -107,11 +107,11 @@ export interface McpServer {
 }
 
 export interface Project {
-  categoryId: string;            // Discord Category ID (primary key)
-  historyChannelId?: string;     // Forum channel ID for archived sessions
-  name: string;                  // Project name (= category name)
-  directory: string;             // Default working directory
-  personality?: string;          // Shared system prompt for all agents in this project
+  categoryId: string; // Discord Category ID (primary key)
+  historyChannelId?: string; // Forum channel ID for archived sessions
+  name: string; // Project name (= category name)
+  directory: string; // Default working directory
+  personality?: string; // Shared system prompt for all agents in this project
   skills: Skill[];
   mcpServers: McpServer[];
   createdAt: number;
@@ -161,7 +161,7 @@ export interface ArchivedSession {
   messageCount: number;
   totalCost: number;
   summary?: string;
-  forumPostId?: string;          // Discord Forum Post (Thread) ID
+  forumPostId?: string; // Discord Forum Post (Thread) ID
 }
 
 // ─── Workflow State (extended) ────────────────────────────────────────────────

@@ -9,11 +9,13 @@ export default defineConfig((options) => ({
   splitting: true,
   external: ['@openai/codex-sdk'],
   banner: {
-    js: "#!/usr/bin/env node",
+    js: '#!/usr/bin/env node',
   },
   // In watch mode, ignore src/ and only rebuild when .restart is touched
-  ...(options.watch ? {
-    ignoreWatch: ['src'],
-    watch: ['.restart'],
-  } : {}),
+  ...(options.watch
+    ? {
+        ignoreWatch: ['src'],
+        watch: ['.restart'],
+      }
+    : {}),
 }));

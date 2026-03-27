@@ -16,7 +16,7 @@ async function withDiscordTimeout<T>(promise: Promise<T>): Promise<T | null> {
   try {
     return await Promise.race([
       promise,
-      new Promise<null>(resolve => setTimeout(() => resolve(null), DISCORD_OP_TIMEOUT_MS)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), DISCORD_OP_TIMEOUT_MS)),
     ]);
   } catch {
     return null;
@@ -60,7 +60,9 @@ export async function executeShellCommand(
     result.all?.trim() || '',
     result.timedOut ? '[Timed out after 60s]' : '',
     `[Exit code: ${result.exitCode ?? 'killed'}]`,
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   runningProcesses.delete(pid);
   execaProcesses.delete(pid);

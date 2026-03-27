@@ -1,10 +1,6 @@
 import Configstore from 'configstore';
 
-export const SENSITIVE_KEYS = new Set([
-  'DISCORD_TOKEN',
-  'ANTHROPIC_API_KEY',
-  'CODEX_API_KEY',
-]);
+export const SENSITIVE_KEYS = new Set(['DISCORD_TOKEN', 'ANTHROPIC_API_KEY', 'CODEX_API_KEY']);
 
 export const VALID_KEYS = new Set([
   'DISCORD_TOKEN',

@@ -7,6 +7,7 @@
 ## 在 Codex 桌面应用中设置
 
 ### 1. 打开 Codex 桌面应用
+
 ```bash
 codex app /Users/ld/Documents/github/agentcord
 ```
@@ -24,6 +25,7 @@ codex app /Users/ld/Documents/github/agentcord
 **Sandbox Mode**: `workspace-write` (推荐) 或 `danger-full-access` (如果需要重启服务)
 
 **Prompt**:
+
 ```
 检查 agentcord Discord bot 服务的健康状态并在需要时重新部署：
 
@@ -177,6 +179,7 @@ Automation 运行后，可以在以下位置查看：
 ## 推荐配置
 
 **最佳实践**：同时使用两种方式
+
 - **launchd 定时任务**（已配置）：系统级保障，每小时自动检查和重启
 - **Codex automation**：提供 AI 分析和智能报告，帮助你理解服务状态
 
