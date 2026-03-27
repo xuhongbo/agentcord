@@ -26,8 +26,9 @@ function getCliPath(): string {
     if (result) {
       // pnpm creates a shell wrapper — parse it to find the real JS file
       try {
-        const wrapper = execSync(`cat "${result}"`, { encoding: 'utf-8' });
-        const match = wrapper.match(/exec\s+(?:\S+\s+)?"?([^"$\s]+cli\.js)"?\s/);
+        const wrapper = readFileSync(result, 'utf-8');
+        // Match patterns like: exec node "$basedir/../../path/to/cli.js"
+        const match = wrapper.match(/exec\s+(?:node|"\$basedir\/node")\s+"?\$basedir\/([^"$\s]+cli\.js)"?/);
         if (match) {
           // Resolve relative paths against the wrapper's directory
           const wrapperDir = execSync(`dirname "${result}"`, { encoding: 'utf-8' }).trim();
