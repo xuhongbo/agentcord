@@ -6,6 +6,9 @@ import { getConfigValue } from './global-config.ts';
 function required(key: string): string {
   const value = getConfigValue(key);
   if (!value) {
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
+      return `test-${key.toLowerCase()}`;
+    }
     console.error(`ERROR: ${key} is not configured.`);
     console.error('Run \x1b[36mthreadcord config setup\x1b[0m to configure.');
     process.exit(1);
@@ -20,7 +23,10 @@ function optional(key: string, fallback: string): string {
 function optionalList(key: string, fallback: string[] = []): string[] {
   const value = getConfigValue(key);
   if (!value) return fallback;
-  return value.split(',').map(item => item.trim()).filter(Boolean);
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function optionalInt(key: string, fallback: number): number {
@@ -60,11 +66,24 @@ export const config = {
   shellEnabled: optionalBool('SHELL_ENABLED', false),
   shellAllowedUsers: optionalList('SHELL_ALLOWED_USERS'),
 
-  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as 'read-only' | 'workspace-write' | 'danger-full-access',
-  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as 'never' | 'on-request' | 'on-failure' | 'untrusted',
+  codexSandboxMode: optional('CODEX_SANDBOX_MODE', 'workspace-write') as
+    | 'read-only'
+    | 'workspace-write'
+    | 'danger-full-access',
+  codexApprovalPolicy: optional('CODEX_APPROVAL_POLICY', 'on-failure') as
+    | 'never'
+    | 'on-request'
+    | 'on-failure'
+    | 'untrusted',
   codexNetworkAccessEnabled: optionalBool('CODEX_NETWORK_ACCESS_ENABLED', false),
   codexWebSearchMode: optional('CODEX_WEB_SEARCH', 'disabled') as 'disabled' | 'cached' | 'live',
-  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '',
+  codexReasoningEffort: optional('CODEX_REASONING_EFFORT', '') as
+    | 'minimal'
+    | 'low'
+    | 'medium'
+    | 'high'
+    | 'xhigh'
+    | '',
   codexBaseUrl: optional('CODEX_BASE_URL', ''),
   codexApiKey: optional('CODEX_API_KEY', ''),
   codexPath: optional('CODEX_PATH', ''),
@@ -84,6 +103,8 @@ if (config.anthropicApiKey) process.env.ANTHROPIC_API_KEY = config.anthropicApiK
 if (config.anthropicBaseUrl) process.env.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
 
 if (config.allowedUsers.length === 0 && !config.allowAllUsers) {
-  console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
-  process.exit(1);
+  if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+    console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
+    process.exit(1);
+  }
 }

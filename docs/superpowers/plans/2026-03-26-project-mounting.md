@@ -16,26 +16,28 @@
 
 ## File Structure
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
-| Create | `src/project-registry.ts` | 全局项目注册表 CRUD（~/.agentcord/projects.json） |
-| Create | `src/project-cli.ts` | CLI project 子命令处理 |
-| Modify | `src/cli.ts` | 新增 project 子命令路由 |
-| Modify | `src/project-manager.ts` | 从 project-registry 读取，移除自动推导 |
-| Modify | `src/command-handlers.ts` | ensureProjectCategory 改为从注册表读取 |
-| Create | `test/project-registry.test.ts` | 项目注册表测试 |
+| Action | Path                            | Responsibility                                    |
+| ------ | ------------------------------- | ------------------------------------------------- |
+| Create | `src/project-registry.ts`       | 全局项目注册表 CRUD（~/.agentcord/projects.json） |
+| Create | `src/project-cli.ts`            | CLI project 子命令处理                            |
+| Modify | `src/cli.ts`                    | 新增 project 子命令路由                           |
+| Modify | `src/project-manager.ts`        | 从 project-registry 读取，移除自动推导            |
+| Modify | `src/command-handlers.ts`       | ensureProjectCategory 改为从注册表读取            |
+| Create | `test/project-registry.test.ts` | 项目注册表测试                                    |
 
 ---
 
 ### Task 1: 创建项目注册表模块
 
 **Files:**
+
 - Create: `src/project-registry.ts`
 - Create: `test/project-registry.test.ts`
 
 - [ ] **Step 1: 写测试**
 
 测试覆盖：
+
 - 注册项目（name + path）
 - 按 name 查询
 - 按 path 查询
@@ -52,14 +54,19 @@
 import { Store } from './persistence.ts';
 
 export interface RegisteredProject {
-  id: string;           // uuid
+  id: string; // uuid
   name: string;
   path: string;
   discordCategoryId?: string;
   discordLogChannelId?: string;
   personality?: string;
   skills: Record<string, string>;
-  mcpServers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers: Array<{
+    name: string;
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }>;
   createdAt: number;
 }
 
@@ -73,7 +80,11 @@ export function getAllRegisteredProjects(): RegisteredProject[];
 export async function registerProject(name: string, path: string): Promise<RegisteredProject>;
 export async function renameProject(oldName: string, newName: string): Promise<void>;
 export async function removeProject(name: string): Promise<void>;
-export async function updateProjectDiscord(name: string, categoryId: string, logChannelId?: string): Promise<void>;
+export async function updateProjectDiscord(
+  name: string,
+  categoryId: string,
+  logChannelId?: string,
+): Promise<void>;
 ```
 
 - [ ] **Step 3: 运行测试确认通过**
@@ -88,12 +99,14 @@ git commit -m "feat: add project registry module"
 ### Task 2: 实现 project CLI 命令
 
 **Files:**
+
 - Create: `src/project-cli.ts`
 - Modify: `src/cli.ts`
 
 - [ ] **Step 1: 实现 `src/project-cli.ts`**
 
 导出 `handleProject(args: string[])`，处理子命令：
+
 - `init [--name <name>]` — 在 cwd 注册项目，name 默认取 basename(cwd)
 - `list` — 列出所有已注册项目
 - `info` — 显示当前目录对应的项目信息
@@ -134,6 +147,7 @@ git commit -m "feat: implement project CLI commands (init/list/info/rename/remov
 ### Task 3: 重构 project-manager.ts 对接注册表
 
 **Files:**
+
 - Modify: `src/project-manager.ts`
 - Modify: `src/bot.ts`
 
@@ -148,6 +162,7 @@ git commit -m "feat: implement project CLI commands (init/list/info/rename/remov
 - [ ] **Step 2: 更新 bot.ts**
 
 在 ready 事件中：
+
 - `await loadRegistry()` 替代 `await loadProjects()`
 - 遍历已注册项目，对有 `discordCategoryId` 的项目验证 Category 是否存在
 - 对没有 `discordCategoryId` 的项目（本地注册但 bot 未在线时），懒创建 Category
@@ -168,6 +183,7 @@ git commit -m "refactor: project-manager reads from global registry, lazy-create
 ### Task 4: 新增 Discord /project list 命令
 
 **Files:**
+
 - Modify: `src/commands.ts`
 - Modify: `src/command-handlers.ts`
 

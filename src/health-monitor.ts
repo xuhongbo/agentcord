@@ -241,7 +241,7 @@ function performHealthChecks(): HealthCheck {
     }
 
     // Check subagent count
-    const subagentCount = sessions.filter(s => s.type === 'subagent').length;
+    const subagentCount = sessions.filter((s) => s.type === 'subagent').length;
     if (subagentCount > 10) {
       issues.push({
         severity: 'warning',
@@ -253,8 +253,8 @@ function performHealthChecks(): HealthCheck {
     console.error('[health-monitor] Failed to perform health checks:', err);
   }
 
-  const hasErrors = issues.some(i => i.severity === 'error');
-  const hasWarnings = issues.some(i => i.severity === 'warning');
+  const hasErrors = issues.some((i) => i.severity === 'error');
+  const hasWarnings = issues.some((i) => i.severity === 'warning');
 
   return {
     status: hasErrors ? 'error' : hasWarnings ? 'warning' : 'healthy',
@@ -284,8 +284,7 @@ export function collectMetrics(): HealthMetrics {
 export function formatStatusReport(metrics: HealthMetrics): string {
   const { system, sessions, projects, activity, health } = metrics;
 
-  const healthIcon = health.status === 'healthy' ? '✅'
-    : health.status === 'warning' ? '⚠️' : '❌';
+  const healthIcon = health.status === 'healthy' ? '✅' : health.status === 'warning' ? '⚠️' : '❌';
 
   let report = '📊 **Bot Status Report**\n\n';
 

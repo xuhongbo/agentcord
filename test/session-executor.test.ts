@@ -72,7 +72,11 @@ describe('executeSessionPrompt', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    await executeSessionPrompt(session as any, channel as any, 'Fix the failing workflow.');
+    await executeSessionPrompt(
+      session as Parameters<typeof executeSessionPrompt>[0],
+      channel as Parameters<typeof executeSessionPrompt>[1],
+      'Fix the failing workflow.',
+    );
 
     expect(setMonitorGoal).toHaveBeenCalledWith('monitor-1', 'Fix the failing workflow.');
   });

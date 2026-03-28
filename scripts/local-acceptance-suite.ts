@@ -11,9 +11,18 @@ const commands = [
   { name: 'config-path', cmd: ['threadcord', 'config', 'path'] },
   { name: 'project-list', cmd: ['threadcord', 'project', 'list'] },
   { name: 'project-info', cmd: ['threadcord', 'project', 'info'] },
-  { name: 'integration-smoke', cmd: ['node', '--experimental-strip-types', 'scripts/integration-smoke.ts'] },
-  { name: 'multi-session-smoke', cmd: ['node', '--experimental-strip-types', 'scripts/multi-session-smoke.ts'] },
-  { name: 'session-sync-smoke', cmd: ['node', '--experimental-strip-types', 'scripts/session-sync-smoke.ts'] },
+  {
+    name: 'integration-smoke',
+    cmd: ['node', '--experimental-strip-types', 'scripts/integration-smoke.ts'],
+  },
+  {
+    name: 'multi-session-smoke',
+    cmd: ['node', '--experimental-strip-types', 'scripts/multi-session-smoke.ts'],
+  },
+  {
+    name: 'session-sync-smoke',
+    cmd: ['node', '--experimental-strip-types', 'scripts/session-sync-smoke.ts'],
+  },
   { name: 'monitor-e2e', cmd: ['node', '--experimental-strip-types', 'scripts/monitor-e2e.ts'] },
 ];
 
@@ -37,11 +46,19 @@ for (const item of commands) {
   });
 }
 
-writeFileSync(join(outDir, 'acceptance-suite-report.json'), JSON.stringify({
-  startedAt: new Date().toISOString(),
-  results,
-  failed: results.filter(item => item.exitCode !== 0).map(item => item.name),
-}, null, 2), 'utf-8');
+writeFileSync(
+  join(outDir, 'acceptance-suite-report.json'),
+  JSON.stringify(
+    {
+      startedAt: new Date().toISOString(),
+      results,
+      failed: results.filter((item) => item.exitCode !== 0).map((item) => item.name),
+    },
+    null,
+    2,
+  ),
+  'utf-8',
+);
 
-const failed = results.filter(item => item.exitCode !== 0);
+const failed = results.filter((item) => item.exitCode !== 0);
 process.exit(failed.length > 0 ? 1 : 0);

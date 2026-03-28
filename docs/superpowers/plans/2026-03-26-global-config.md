@@ -14,26 +14,27 @@
 
 ## File Structure
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
-| Create | `src/global-config.ts` | Configstore 读写封装，校验，遮罩显示 |
-| Modify | `src/config.ts` | 从 global-config 读取替代 dotenv |
-| Modify | `src/types.ts` | 移除 Config.allowedPaths / Config.defaultDirectory |
-| Modify | `src/persistence.ts` | DATA_DIR 改为 ~/.agentcord/ |
-| Modify | `src/cli.ts` | 新增 config 子命令，移除 .env 检查 |
-| Modify | `src/setup.ts` | 写入 Configstore 替代 .env |
-| Modify | `src/daemon.ts` | WorkingDirectory 改为 ~/.agentcord |
-| Modify | `src/session-manager.ts` | 移除 isPathAllowed 调用 |
-| Modify | `src/command-handlers.ts` | 移除 config.defaultDirectory 引用 |
-| Modify | `src/agent-router.ts` | 移除 config.defaultDirectory 引用 |
-| Modify | `src/utils.ts` | 移除 isPathAllowed 函数 |
-| Create | `test/global-config.test.ts` | 全局配置读写测试 |
+| Action | Path                         | Responsibility                                     |
+| ------ | ---------------------------- | -------------------------------------------------- |
+| Create | `src/global-config.ts`       | Configstore 读写封装，校验，遮罩显示               |
+| Modify | `src/config.ts`              | 从 global-config 读取替代 dotenv                   |
+| Modify | `src/types.ts`               | 移除 Config.allowedPaths / Config.defaultDirectory |
+| Modify | `src/persistence.ts`         | DATA_DIR 改为 ~/.agentcord/                        |
+| Modify | `src/cli.ts`                 | 新增 config 子命令，移除 .env 检查                 |
+| Modify | `src/setup.ts`               | 写入 Configstore 替代 .env                         |
+| Modify | `src/daemon.ts`              | WorkingDirectory 改为 ~/.agentcord                 |
+| Modify | `src/session-manager.ts`     | 移除 isPathAllowed 调用                            |
+| Modify | `src/command-handlers.ts`    | 移除 config.defaultDirectory 引用                  |
+| Modify | `src/agent-router.ts`        | 移除 config.defaultDirectory 引用                  |
+| Modify | `src/utils.ts`               | 移除 isPathAllowed 函数                            |
+| Create | `test/global-config.test.ts` | 全局配置读写测试                                   |
 
 由于计划内容较长，已拆分为 9 个 Task，完整内容见下方。每个 Task 遵循 TDD 流程（测试先行）并在完成后独立 commit。
 
 ### Task 1: 安装 Configstore 并创建全局配置模块
 
 **Files:**
+
 - Create: `src/global-config.ts`
 - Create: `test/global-config.test.ts`
 
@@ -61,6 +62,7 @@ Expected: FAIL — module `../src/global-config.ts` not found
 - [ ] **Step 4: 实现 `src/global-config.ts`**
 
 导出：
+
 - `SENSITIVE_KEYS`: Set — 包含 `DISCORD_TOKEN`
 - `VALID_KEYS`: Set — 所有合法配置 key
 - `validateConfigValue(key, value)`: 返回 `string | null`（null 表示合法）
@@ -91,6 +93,7 @@ git commit -m "feat: add global-config module with Configstore"
 ### Task 2: 重写 config.ts 从 Configstore 读取
 
 **Files:**
+
 - Modify: `src/config.ts`
 - Modify: `src/types.ts:168-181`
 
@@ -119,6 +122,7 @@ Expected: 编译错误指向引用 `config.allowedPaths` 和 `config.defaultDire
 ### Task 3: 清理 allowedPaths 和 defaultDirectory 引用
 
 **Files:**
+
 - Modify: `src/session-manager.ts:171`
 - Modify: `src/command-handlers.ts:219,444,702`
 - Modify: `src/agent-router.ts:139`
@@ -131,6 +135,7 @@ Expected: 编译错误指向引用 `config.allowedPaths` 和 `config.defaultDire
 - [ ] **Step 2: command-handlers.ts — 移除 config.defaultDirectory**
 
 三处引用：
+
 - `/session new` 的 directory fallback → 改为 directory 必填，缺失时报错（临时方案，Plan 3 会重构为 project 选择）
 - `/session resume` 的 directory fallback → 同上
 - `/session sync` 的 directory fallback → 跳过无 directory metadata 的频道
@@ -157,6 +162,7 @@ git commit -m "refactor: rewrite config to Configstore, remove allowedPaths and 
 ### Task 4: 迁移 persistence.ts 到全局路径
 
 **Files:**
+
 - Modify: `src/persistence.ts`
 
 - [ ] **Step 1: 修改 DATA_DIR**
@@ -185,6 +191,7 @@ git commit -m "refactor: move data storage to ~/.agentcord/"
 ### Task 5: 新增 CLI config 子命令
 
 **Files:**
+
 - Modify: `src/cli.ts`
 
 - [ ] **Step 1: 重写 cli.ts**
@@ -204,11 +211,13 @@ git commit -m "feat: add config subcommand to CLI, remove .env check"
 ### Task 6: 实现 config-cli.ts 命令处理
 
 **Files:**
+
 - Create: `src/config-cli.ts`
 
 - [ ] **Step 1: 实现 config-cli.ts**
 
 导出 `handleConfig(args: string[])`，处理子命令：
+
 - `setup` → 调用 `setup.ts` 的 `runSetup()`
 - `get <key>` → 读取并输出（敏感值遮罩）
 - `set <key> <value>` → 校验后写入
@@ -227,6 +236,7 @@ git commit -m "feat: implement config CLI commands (get/set/unset/list/path)"
 ### Task 7: 重写 setup.ts 写入 Configstore
 
 **Files:**
+
 - Modify: `src/setup.ts`
 
 - [ ] **Step 1: 重写 setup.ts**
@@ -255,6 +265,7 @@ git commit -m "feat: rewrite setup wizard to use Configstore"
 ### Task 8: 更新 daemon.ts 移除 .env 依赖
 
 **Files:**
+
 - Modify: `src/daemon.ts`
 
 - [ ] **Step 1: 修改 WorkingDirectory**
@@ -275,6 +286,7 @@ git commit -m "refactor: daemon uses ~/.agentcord as WorkingDirectory"
 ### Task 9: 移除 dotenv 依赖并清理
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `src/index.ts`
 

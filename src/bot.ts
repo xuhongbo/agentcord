@@ -24,12 +24,7 @@ import {
 } from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
 import { handleButton, handleSelectMenu } from './button-handler.ts';
-import {
-  loadSessions,
-  getAllSessions,
-  endSession,
-  getSessionByChannel,
-} from './thread-manager.ts';
+import { loadSessions, getAllSessions, endSession, getSessionByChannel } from './thread-manager.ts';
 import { loadProjects } from './project-manager.ts';
 import { runSubagentWatchdog } from './subagent-manager.ts';
 import { loadArchived, checkAutoArchive } from './archive-manager.ts';
@@ -38,7 +33,7 @@ import { startHealthMonitor, stopHealthMonitor, setBotStartTime } from './health
 
 let client: Client;
 let logChannel: TextChannel | null = null;
-let logBuffer: string[] = [];
+const logBuffer: string[] = [];
 let logTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ─── Process lock ─────────────────────────────────────────────────────────────
@@ -62,9 +57,15 @@ function acquireLock(): boolean {
         console.error(`[bot] Another instance is already running (PID ${pid}). Exiting.`);
         return false;
       }
-    } catch { /* stale lock file */ }
+    } catch {
+      /* stale lock file */
+    }
     // Stale lock — remove it
-    try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+    try {
+      unlinkSync(LOCK_FILE);
+    } catch {
+      /* ignore */
+    }
   }
   writeFileSync(LOCK_FILE, process.pid.toString(), 'utf-8');
   return true;
@@ -79,7 +80,9 @@ function releaseLock(): void {
         unlinkSync(LOCK_FILE);
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
@@ -125,7 +128,7 @@ export async function flushLogs(): Promise<void> {
 
 function updatePresence(): void {
   const all = getAllSessions();
-  const generating = all.filter(s => s.isGenerating).length;
+  const generating = all.filter((s) => s.isGenerating).length;
 
   if (all.length === 0) {
     client.user?.setPresence({
@@ -152,11 +155,13 @@ async function cleanupOldMessages(): Promise<void> {
       if (!channel) continue;
 
       const messages = await channel.messages.fetch({ limit: 100 });
-      const old = messages.filter(m => m.createdTimestamp < cutoff);
+      const old = messages.filter((m) => m.createdTimestamp < cutoff);
       if (old.size > 0) {
         await channel.bulkDelete(old, true);
       }
-    } catch { /* channel may not exist */ }
+    } catch {
+      /* channel may not exist */
+    }
   }
 }
 
@@ -177,19 +182,30 @@ export async function startBot(): Promise<void> {
   setLogger(botLog);
 
   // Slash command / button interactions
-  client.on('interactionCreate', async interaction => {
+  client.on('interactionCreate', async (interaction) => {
     try {
-      if (interaction.type === InteractionType.ApplicationCommand && interaction.isChatInputCommand()) {
+      if (
+        interaction.type === InteractionType.ApplicationCommand &&
+        interaction.isChatInputCommand()
+      ) {
         switch (interaction.commandName) {
-          case 'project': return await handleProject(interaction);
-          case 'agent': return await handleAgent(interaction);
-          case 'subagent': return await handleSubagent(interaction);
-          case 'shell': return await handleShell(interaction);
+          case 'project':
+            return await handleProject(interaction);
+          case 'agent':
+            return await handleAgent(interaction);
+          case 'subagent':
+            return await handleSubagent(interaction);
+          case 'shell':
+            return await handleShell(interaction);
           // 快捷命令
-          case 'spawn': return await handleSpawnShortcut(interaction);
-          case 'stop': return await handleStopShortcut(interaction);
-          case 'end': return await handleEndShortcut(interaction);
-          case 'run': return await handleRunShortcut(interaction);
+          case 'spawn':
+            return await handleSpawnShortcut(interaction);
+          case 'stop':
+            return await handleStopShortcut(interaction);
+          case 'end':
+            return await handleEndShortcut(interaction);
+          case 'run':
+            return await handleRunShortcut(interaction);
         }
       }
 
@@ -206,7 +222,9 @@ export async function startBot(): Promise<void> {
         if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: 'An error occurred.', ephemeral: true });
         }
-      } catch { /* can't recover */ }
+      } catch {
+        /* can't recover */
+      }
     }
   });
 
@@ -214,20 +232,20 @@ export async function startBot(): Promise<void> {
   client.on('messageCreate', handleMessage);
 
   // Session channel deleted → end the persistent session
-  client.on('channelDelete', channel => {
+  client.on('channelDelete', (channel) => {
     const session = getSessionByChannel(channel.id);
     if (session && session.type === 'persistent') {
-      endSession(session.id).catch(err =>
+      endSession(session.id).catch((err) =>
         console.error(`Failed to end session on channel delete: ${err.message}`),
       );
     }
   });
 
   // Subagent thread deleted → end the subagent session
-  client.on('threadDelete', thread => {
+  client.on('threadDelete', (thread) => {
     const session = getSessionByChannel(thread.id);
     if (session && session.type === 'subagent') {
-      endSession(session.id).catch(err =>
+      endSession(session.id).catch((err) =>
         console.error(`Failed to end subagent session on thread delete: ${err.message}`),
       );
     }
@@ -245,9 +263,10 @@ export async function startBot(): Promise<void> {
     // Find or create #bot-logs channel at the server root (no category)
     const guild = client.guilds.cache.first();
     if (guild) {
-      logChannel = guild.channels.cache.find(
-        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
-      ) as TextChannel | undefined ?? null;
+      logChannel =
+        (guild.channels.cache.find(
+          (ch) => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
+        ) as TextChannel | undefined) ?? null;
 
       if (!logChannel) {
         try {
@@ -276,22 +295,28 @@ export async function startBot(): Promise<void> {
     setInterval(updatePresence, 30_000);
 
     // Subagent watchdog every 5 minutes
-    setInterval(() => {
-      runSubagentWatchdog(threadId => {
-        const ch = client.channels.cache.get(threadId);
-        return ch?.isThread() ? ch : undefined;
-      }).catch(err => console.error(`Subagent watchdog error: ${err.message}`));
-    }, 5 * 60 * 1000);
+    setInterval(
+      () => {
+        runSubagentWatchdog((threadId) => {
+          const ch = client.channels.cache.get(threadId);
+          return ch?.isThread() ? ch : undefined;
+        }).catch((err) => console.error(`Subagent watchdog error: ${err.message}`));
+      },
+      5 * 60 * 1000,
+    );
 
     // Auto-archive check every hour
     if (config.autoArchiveDays || config.maxActiveSessionsPerProject) {
       const guild = client.guilds.cache.first();
       if (guild) {
-        setInterval(() => {
-          checkAutoArchive(guild).catch(err =>
-            console.error(`Auto-archive check error: ${err.message}`),
-          );
-        }, 60 * 60 * 1000);
+        setInterval(
+          () => {
+            checkAutoArchive(guild).catch((err) =>
+              console.error(`Auto-archive check error: ${err.message}`),
+            );
+          },
+          60 * 60 * 1000,
+        );
       }
     }
 
@@ -303,12 +328,12 @@ export async function startBot(): Promise<void> {
   });
 
   // Discord connection error handlers (must be registered before login)
-  client.on('error', err => {
+  client.on('error', (err) => {
     botLog(`Discord client error: ${err.message}`);
     console.error('Discord client error:', err);
   });
 
-  client.on('warn', msg => {
+  client.on('warn', (msg) => {
     console.warn('Discord warn:', msg);
   });
 
@@ -318,11 +343,13 @@ export async function startBot(): Promise<void> {
   });
 
   client.on('shardDisconnect', (event, shardId) => {
-    botLog(`Shard ${shardId} disconnected (code ${event.code}). discord.js will attempt reconnect.`);
+    botLog(
+      `Shard ${shardId} disconnected (code ${event.code}). discord.js will attempt reconnect.`,
+    );
     console.warn(`Shard ${shardId} disconnected:`, event);
   });
 
-  client.on('shardReconnecting', shardId => {
+  client.on('shardReconnecting', (shardId) => {
     console.log(`Shard ${shardId} reconnecting...`);
   });
 
@@ -331,9 +358,10 @@ export async function startBot(): Promise<void> {
     // Refresh logChannel reference after reconnect
     const guild = client.guilds.cache.first();
     if (guild) {
-      logChannel = guild.channels.cache.find(
-        ch => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
-      ) as TextChannel | undefined ?? logChannel;
+      logChannel =
+        (guild.channels.cache.find(
+          (ch) => ch.name === 'bot-logs' && ch.type === ChannelType.GuildText && !ch.parentId,
+        ) as TextChannel | undefined) ?? logChannel;
     }
   });
 
@@ -348,8 +376,12 @@ export async function startBot(): Promise<void> {
     process.exit(0);
   };
 
-  process.on('SIGINT', () => { shutdown().catch(() => process.exit(0)); });
-  process.on('SIGTERM', () => { shutdown().catch(() => process.exit(0)); });
+  process.on('SIGINT', () => {
+    shutdown().catch(() => process.exit(0));
+  });
+  process.on('SIGTERM', () => {
+    shutdown().catch(() => process.exit(0));
+  });
 
   process.on('uncaughtException', async (err) => {
     console.error('Uncaught exception:', err);

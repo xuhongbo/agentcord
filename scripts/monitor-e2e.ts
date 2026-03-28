@@ -17,23 +17,34 @@ const session = await sessions.createSession({
 });
 
 sessions.setMode(session.id, 'monitor');
-sessions.setMonitorGoal(session.id, 'Create a file proving monitor mode can drive a task to completion.');
+sessions.setMonitorGoal(
+  session.id,
+  'Create a file proving monitor mode can drive a task to completion.',
+);
 
 const sentMessages: string[] = [];
+type MessagePayload =
+  | string
+  | {
+      content?: string;
+      embeds?: Array<{ data?: { title?: string; description?: string } }>;
+    };
 const channel = {
   topic: null as string | null,
-  async send(payload: any) {
-    const text = typeof payload === 'string'
-      ? payload
-      : payload?.content
-        ? String(payload.content)
-        : payload?.embeds?.map((e: any) => `${e.data?.title || ''}\n${e.data?.description || ''}`).join('\n')
-          || JSON.stringify(payload);
+  async send(payload: MessagePayload) {
+    const text =
+      typeof payload === 'string'
+        ? payload
+        : payload?.content
+          ? String(payload.content)
+          : payload?.embeds
+              ?.map((e) => `${e.data?.title || ''}\n${e.data?.description || ''}`)
+              .join('\n') || JSON.stringify(payload);
     sentMessages.push(text);
     process.stdout.write(`\n--- CHANNEL SEND ---\n${text}\n`);
     return {
       content: text,
-      async edit(next: any) {
+      async edit(next: MessagePayload) {
         const edited = typeof next === 'string' ? next : next?.content || JSON.stringify(next);
         sentMessages.push(String(edited));
       },
@@ -47,15 +58,18 @@ const channel = {
   },
 };
 
-const prompt = 'Create a file named monitor-proof.txt in the current working directory containing exactly MONITOR_E2E_OK, then explain what you created.';
+const prompt =
+  'Create a file named monitor-proof.txt in the current working directory containing exactly MONITOR_E2E_OK, then explain what you created.';
 let runError: string | null = null;
 
 try {
   await Promise.race([
-    executeSessionPrompt(sessions.getSession(session.id)!, channel as any, prompt, {
+    executeSessionPrompt(sessions.getSession(session.id)!, channel, prompt, {
       updateMonitorGoal: true,
     }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('monitor-e2e timeout after 120s')), 120000)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('monitor-e2e timeout after 120s')), 120000),
+    ),
   ]);
 
   const files = readdirSync(baseDir);
@@ -63,8 +77,8 @@ try {
     sessionId: session.id,
     baseDir,
     files,
-    monitorPasses: sentMessages.filter(msg => msg.includes('Monitor: pass')).length,
-    completion: sentMessages.find(msg => msg.includes('completion bar met')) || '(none)',
+    monitorPasses: sentMessages.filter((msg) => msg.includes('Monitor: pass')).length,
+    completion: sentMessages.find((msg) => msg.includes('completion bar met')) || '(none)',
     messages: sentMessages.slice(-20),
   };
 
@@ -82,8 +96,8 @@ try {
     sessionId: session.id,
     baseDir,
     files: readdirSync(baseDir),
-    monitorPasses: sentMessages.filter(msg => msg.includes('Monitor: pass')).length,
-    completion: sentMessages.find(msg => msg.includes('completion bar met')) || '(none)',
+    monitorPasses: sentMessages.filter((msg) => msg.includes('Monitor: pass')).length,
+    completion: sentMessages.find((msg) => msg.includes('completion bar met')) || '(none)',
     runError,
     messages: sentMessages.slice(-30),
   };

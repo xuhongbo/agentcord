@@ -14,26 +14,28 @@
 
 ## File Structure
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
-| Create | `src/session-sync.ts` | 轮询发现 + 频道创建 + 会话注册 |
-| Create | `src/codex-session-discovery.ts` | Codex 索引读取、会话文件定位、`session_meta` 解析、项目归属过滤 |
-| Modify | `src/bot.ts` | 启动同步定时器 |
-| Modify | `src/session-manager.ts` | 新增 `createSyncedSession` 方法 |
-| Create | `test/codex-session-discovery.test.ts` | Codex 发现逻辑测试 |
-| Create | `test/session-sync.test.ts` | 同步逻辑测试 |
+| Action | Path                                   | Responsibility                                                  |
+| ------ | -------------------------------------- | --------------------------------------------------------------- |
+| Create | `src/session-sync.ts`                  | 轮询发现 + 频道创建 + 会话注册                                  |
+| Create | `src/codex-session-discovery.ts`       | Codex 索引读取、会话文件定位、`session_meta` 解析、项目归属过滤 |
+| Modify | `src/bot.ts`                           | 启动同步定时器                                                  |
+| Modify | `src/session-manager.ts`               | 新增 `createSyncedSession` 方法                                 |
+| Create | `test/codex-session-discovery.test.ts` | Codex 发现逻辑测试                                              |
+| Create | `test/session-sync.test.ts`            | 同步逻辑测试                                                    |
 
 ---
 
 ### Task 1: 实现 Codex 会话发现模块
 
 **Files:**
+
 - Create: `src/codex-session-discovery.ts`
 - Create: `test/codex-session-discovery.test.ts`
 
 - [ ] **Step 1: 写失败测试**
 
 测试覆盖：
+
 - `readSessionIndex()` 读取 `session_index.jsonl`，提取 `id` / `thread_name` / `updated_at`
 - 索引记录缺少 `id` 时跳过
 - `findSessionFileById()` 允许通过扫描 `sessions/**/*.jsonl` 内容匹配 `id`
@@ -77,22 +79,31 @@ export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIn
   // 读取 session_index.jsonl，解析 JSONL，过滤缺少 id 的记录
 }
 
-export function findSessionFileById(id: string, codexHome = join(homedir(), '.codex')): string | null {
+export function findSessionFileById(
+  id: string,
+  codexHome = join(homedir(), '.codex'),
+): string | null {
   // 扫描 sessions/**/*.jsonl，允许通过文件内容匹配 id
 }
 
 export function isSubpathOfProject(cwd: string, projectPath: string): boolean {
   const normalizedCwd = resolve(cwd);
   const normalizedProject = resolve(projectPath);
-  return normalizedCwd === normalizedProject || normalizedCwd.startsWith(`${normalizedProject}${sep}`);
+  return (
+    normalizedCwd === normalizedProject || normalizedCwd.startsWith(`${normalizedProject}${sep}`)
+  );
 }
 
-export function listCodexSessionsForProjects(projectPaths: string[], codexHome = join(homedir(), '.codex')): CodexDiscoveredSession[] {
+export function listCodexSessionsForProjects(
+  projectPaths: string[],
+  codexHome = join(homedir(), '.codex'),
+): CodexDiscoveredSession[] {
   // 读取索引 → 按 id 定位文件 → 读取首条 session_meta.payload.cwd → 过滤属于已挂载项目的会话
 }
 ```
 
 实现要求：
+
 - `thread_name` 缺失时可回退为 `id`
 - 只读取会话文件首条记录用于判断 `cwd`
 - 任一候选会话解析失败时直接跳过，不影响其他会话
@@ -116,6 +127,7 @@ git commit -m "feat: add Codex session discovery from JSONL state"
 ### Task 2: 实现会话同步核心模块
 
 **Files:**
+
 - Create: `src/session-sync.ts`
 - Modify: `src/session-manager.ts`
 
@@ -129,10 +141,11 @@ export async function createSyncedSession(
   projectName: string,
   provider: ProviderName,
   providerSessionId: string,
-): Promise<Session>
+): Promise<Session>;
 ```
 
 与 `createSession` 类似，但：
+
 - 不做 name 去重（ID 来自 provider）
 - 不创建 tmux（已移除）
 - 标记 `source: 'local-sync'`
@@ -168,7 +181,7 @@ async function runSync(client: Client): Promise<void> {
 
   const existingSessions = sessions.getAllSessions();
   const existingProviderIds = new Set(
-    existingSessions.map(s => s.providerSessionId).filter(Boolean),
+    existingSessions.map((s) => s.providerSessionId).filter(Boolean),
   );
 
   for (const project of projects) {
@@ -176,7 +189,13 @@ async function runSync(client: Client): Promise<void> {
       const claudeSessions = await listSessions({ dir: project.path, limit: 50 });
       for (const cs of claudeSessions) {
         if (existingProviderIds.has(cs.sessionId)) continue;
-        await syncSession(guild, project, 'claude', cs.sessionId, cs.summary || cs.firstPrompt || cs.sessionId);
+        await syncSession(
+          guild,
+          project,
+          'claude',
+          cs.sessionId,
+          cs.summary || cs.firstPrompt || cs.sessionId,
+        );
         existingProviderIds.add(cs.sessionId);
       }
     } catch {
@@ -184,10 +203,10 @@ async function runSync(client: Client): Promise<void> {
     }
   }
 
-  const codexSessions = listCodexSessionsForProjects(projects.map(p => p.path));
+  const codexSessions = listCodexSessionsForProjects(projects.map((p) => p.path));
   for (const session of codexSessions) {
     if (existingProviderIds.has(session.id)) continue;
-    const project = projects.find(p => p.path === session.projectPath);
+    const project = projects.find((p) => p.path === session.projectPath);
     if (!project) continue;
     await syncSession(guild, project, 'codex', session.id, session.threadName);
     existingProviderIds.add(session.id);
@@ -196,6 +215,7 @@ async function runSync(client: Client): Promise<void> {
 ```
 
 同步要求：
+
 - Codex 仅使用发现模块返回的 `projectPath` 和 `cwd` 结果，不在 `session-sync.ts` 内重复猜测项目归属
 - 找不到项目、创建频道失败、或单条会话注册失败时记录日志并继续下一条
 - 已存在 `providerSessionId` 的会话不得重复创建
@@ -210,6 +230,7 @@ git commit -m "feat: implement local session sync for Claude and Codex JSONL dis
 ### Task 3: 集成到 `bot.ts`
 
 **Files:**
+
 - Modify: `src/bot.ts`
 
 - [ ] **Step 1: 在 ready 事件中启动同步**
@@ -242,11 +263,13 @@ git commit -m "feat: start session sync on bot ready"
 ### Task 4: 测试同步逻辑
 
 **Files:**
+
 - Create: `test/session-sync.test.ts`
 
 - [ ] **Step 1: 写测试**
 
 测试覆盖：
+
 - 发现新 Claude 会话 → 创建频道 + 注册
 - 发现新 Codex 会话 → 创建频道 + 注册
 - 已注册会话不重复创建
@@ -257,6 +280,7 @@ git commit -m "feat: start session sync on bot ready"
 - Codex 会话 `cwd` 不属于已挂载项目时不创建频道
 
 使用 mock：
+
 - `vi.mock('@anthropic-ai/claude-agent-sdk')` mock `listSessions`
 - `vi.mock('./codex-session-discovery.ts')` mock `listCodexSessionsForProjects`
 - `vi.mock('./session-manager.ts')` mock session 操作

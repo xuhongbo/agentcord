@@ -10,6 +10,16 @@ import {
 } from 'discord.js';
 
 type SessionChannel = TextChannel | AnyThreadChannel;
+type EditableRow = ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>;
+type ComponentLike = {
+  customId?: string;
+  label?: string;
+  options?: Array<{ label: string; description?: string; value: string }>;
+};
+
+function asComponentLike(component: unknown): ComponentLike {
+  return (component || {}) as ComponentLike;
+}
 import { config } from './config.ts';
 import * as sessions from './thread-manager.ts';
 import {
@@ -118,26 +128,31 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
 
     try {
       const original = interaction.message;
-      const updatedComponents = original.components.map((row: any) => {
-        const firstComponent = row.components?.[0];
-        if (!firstComponent?.customId?.startsWith('pick:')) return row;
+      const updatedComponents: EditableRow[] = original.components.map((row) => {
+        if (!('components' in row)) return row as unknown as EditableRow;
+        const firstComponent = asComponentLike(row.components?.[0]);
+        if (!firstComponent?.customId?.startsWith('pick:')) return row as unknown as EditableRow;
         const rowQi = parseInt(firstComponent.customId.split(':')[2], 10);
-        if (rowQi !== questionIndex) return row;
+        if (rowQi !== questionIndex) return row as unknown as EditableRow;
         const newRow = new ActionRowBuilder<ButtonBuilder>();
         for (const btn of row.components) {
-          const btnAnswer = btn.customId.split(':').slice(3).join(':');
+          const btnData = asComponentLike(btn);
+          if (!btnData.customId || !btnData.label) continue;
+          const btnAnswer = btnData.customId.split(':').slice(3).join(':');
           const isSelected = btnAnswer === answer;
           newRow.addComponents(
             new ButtonBuilder()
-              .setCustomId(btn.customId)
-              .setLabel(btn.label)
+              .setCustomId(btnData.customId)
+              .setLabel(btnData.label)
               .setStyle(isSelected ? ButtonStyle.Success : ButtonStyle.Secondary),
           );
         }
         return newRow;
       });
-      await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+      await original.edit({ components: updatedComponents });
+    } catch {
+      /* message may be deleted */
+    }
 
     await interaction.reply({
       content: `Selected for Q${questionIndex + 1}: **${truncate(answer, 100)}** (${answeredCount}/${totalQuestions} answered)`,
@@ -244,15 +259,18 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     try {
       const original = interaction.message;
       const session = sessions.getSession(sessionId);
-      const updatedComponents = original.components.map((row: any) => {
-        const first = row.components?.[0];
+      const updatedComponents: EditableRow[] = original.components.map((row) => {
+        if (!('components' in row)) return row as unknown as EditableRow;
+        const first = asComponentLike(row.components?.[0]);
         if (first?.customId?.startsWith('mode:')) {
-          return makeModeButtons(sessionId, newMode, session?.claudePermissionMode);
+          return makeModeButtons(sessionId, newMode, session?.claudePermissionMode) as EditableRow;
         }
-        return row;
+        return row as unknown as EditableRow;
       });
-      await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+      await original.edit({ components: updatedComponents });
+    } catch {
+      /* message may be deleted */
+    }
     return;
   }
 
@@ -284,13 +302,14 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
 
     try {
       const original = interaction.message;
-      const updatedComponents = original.components.map((row: any) => {
-        const comp = row.components?.[0];
-        if (comp?.customId !== customId) return row;
+      const updatedComponents: EditableRow[] = original.components.map((row) => {
+        if (!('components' in row)) return row as unknown as EditableRow;
+        const comp = asComponentLike(row.components?.[0]);
+        if (comp?.customId !== customId) return row as unknown as EditableRow;
         const menu = new StringSelectMenuBuilder()
           .setCustomId(customId)
           .setPlaceholder(`Selected: ${selected.slice(0, 80)}`);
-        for (const opt of comp.options) {
+        for (const opt of comp.options || []) {
           menu.addOptions({
             label: opt.label,
             description: opt.description || undefined,
@@ -300,8 +319,10 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
         }
         return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
       });
-      await original.edit({ components: updatedComponents as any });
-    } catch { /* message may be deleted */ }
+      await original.edit({ components: updatedComponents });
+    } catch {
+      /* message may be deleted */
+    }
 
     await interaction.reply({
       content: `Selected for Q${questionIndex + 1}: **${truncate(selected, 100)}** (${answeredCount}/${totalQuestions} answered)`,

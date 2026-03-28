@@ -1,21 +1,50 @@
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
-} from './types.ts';
+import { query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { Provider, ProviderEvent, ProviderSessionOptions, ContentBlock } from './types.ts';
 
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp']);
+type ClaudeStreamEvent = {
+  type?: string;
+  content_block?: { type?: string; name?: string };
+  delta?: { type?: string; text?: string; partial_json?: string };
+};
+type ClaudeSystemMessage = SDKMessage & {
+  subtype?: string;
+  session_id?: string;
+  task_id?: string;
+  description?: string;
+  last_tool_name?: string;
+  summary?: string;
+  status?: string;
+};
+type ClaudeUserMessage = SDKMessage & {
+  message?: {
+    content?: Array<{ type?: string; content?: unknown } | { type?: string; text?: string }>;
+  };
+};
+type ClaudeResultMessage = SDKMessage & {
+  subtype?: string;
+  total_cost_usd?: number;
+  duration_ms?: number;
+  num_turns?: number;
+  errors?: string[];
+};
 
 function extractImagePath(toolName: string, toolInput: string): string | null {
   try {
     const data = JSON.parse(toolInput);
     if (toolName === 'Write' || toolName === 'Read') {
       const filePath: string = data.file_path;
-      if (filePath && IMAGE_EXTENSIONS.has(filePath.slice(filePath.lastIndexOf('.')).toLowerCase())) {
+      if (
+        filePath &&
+        IMAGE_EXTENSIONS.has(filePath.slice(filePath.lastIndexOf('.')).toLowerCase())
+      ) {
         return filePath;
       }
     }
-  } catch { /* incomplete or invalid JSON */ }
+  } catch {
+    /* incomplete or invalid JSON */
+  }
   return null;
 }
 
@@ -33,8 +62,11 @@ export class ClaudeProvider implements Provider {
 
   supports(feature: string): boolean {
     return [
-      'resume_from_terminal', 'plugins',
-      'ask_user_question', 'mode_switching', 'continue',
+      'resume_from_terminal',
+      'plugins',
+      'ask_user_question',
+      'mode_switching',
+      'continue',
     ].includes(feature);
   }
 
@@ -45,17 +77,19 @@ export class ClaudeProvider implements Provider {
     const systemPrompt = buildClaudeSystemPrompt(options.systemPromptParts);
     const isBypass = options.claudePermissionMode === 'bypass';
 
-    function buildQueryPrompt(): string | AsyncIterable<any> {
+    function buildQueryPrompt(): string | AsyncIterable<SDKUserMessage> {
       if (typeof prompt === 'string') return prompt;
       // Filter out LocalImageBlock (not supported by Claude directly)
-      const claudeBlocks = (prompt as ContentBlock[]).filter(b => b.type !== 'local_image');
+      const claudeBlocks = (prompt as ContentBlock[]).filter((b) => b.type !== 'local_image');
       const userMessage = {
         type: 'user' as const,
         message: { role: 'user' as const, content: claudeBlocks },
         parent_tool_use_id: null,
         session_id: '',
       };
-      return (async function* () { yield userMessage; })();
+      return (async function* () {
+        yield userMessage;
+      })();
     }
 
     let retried = false;
@@ -95,9 +129,7 @@ export class ClaudeProvider implements Provider {
     }
   }
 
-  async *continueSession(
-    options: ProviderSessionOptions,
-  ): AsyncGenerator<ProviderEvent> {
+  async *continueSession(options: ProviderSessionOptions): AsyncGenerator<ProviderEvent> {
     const systemPrompt = buildClaudeSystemPrompt(options.systemPromptParts);
     const isBypass = options.claudePermissionMode === 'bypass';
 
@@ -148,11 +180,12 @@ export class ClaudeProvider implements Provider {
     for await (const message of stream) {
       // Capture session ID from init message
       if (message.type === 'system' && 'subtype' in message && message.subtype === 'init') {
-        yield { type: 'session_init', providerSessionId: (message as any).session_id };
+        const initMessage = message as ClaudeSystemMessage;
+        yield { type: 'session_init', providerSessionId: initMessage.session_id || '' };
       }
 
       if (message.type === 'stream_event') {
-        const event = (message as any).event;
+        const event = (message as { event?: ClaudeStreamEvent }).event;
 
         if (event?.type === 'content_block_start') {
           if (event.content_block?.type === 'tool_use') {
@@ -199,9 +232,9 @@ export class ClaudeProvider implements Provider {
 
       // Tool results (user messages containing tool_result blocks)
       if (message.type === 'user') {
-        const content = (message as any).message?.content;
+        const content = (message as ClaudeUserMessage).message?.content;
         let resultText = '';
-        let toolName = '';
+        const toolName = '';
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_result' && block.content) {
@@ -222,34 +255,37 @@ export class ClaudeProvider implements Provider {
 
       // Task lifecycle messages (internal subagents spawned by Claude)
       if (message.type === 'system') {
-        const sub = (message as any).subtype;
+        const systemMessage = message as ClaudeSystemMessage;
+        const sub = systemMessage.subtype;
         if (sub === 'task_started') {
           yield {
             type: 'task_started',
-            taskId: (message as any).task_id || '',
-            description: (message as any).description || '',
+            taskId: systemMessage.task_id || '',
+            description: systemMessage.description || '',
           };
         } else if (sub === 'task_progress') {
           yield {
             type: 'task_progress',
-            taskId: (message as any).task_id || '',
-            description: (message as any).description || '',
-            lastToolName: (message as any).last_tool_name,
-            summary: (message as any).summary,
+            taskId: systemMessage.task_id || '',
+            description: systemMessage.description || '',
+            lastToolName: systemMessage.last_tool_name,
+            summary: systemMessage.summary,
           };
         } else if (sub === 'task_notification') {
           yield {
             type: 'task_done',
-            taskId: (message as any).task_id || '',
-            status: (message as any).status || 'completed',
-            summary: (message as any).summary || '',
+            taskId: systemMessage.task_id || '',
+            status:
+              (systemMessage.status as 'completed' | 'failed' | 'stopped' | undefined) ||
+              'completed',
+            summary: systemMessage.summary || '',
           };
         }
       }
 
       // Result message
       if (message.type === 'result') {
-        const r = message as any;
+        const r = message as ClaudeResultMessage;
 
         // Detect failure that should trigger retry
         if (r.subtype !== 'success' && !alreadyRetried && resumeId) {

@@ -51,7 +51,7 @@ export async function runSetup(): Promise<void> {
         `${bold('6.')} Go to the ${bold('General Information')} tab`,
         `${bold('7.')} Copy the ${bold('Application ID')} (this is your Client ID)`,
         '',
-        dim('Keep this tab open — you\'ll need the token and ID next.'),
+        dim("Keep this tab open — you'll need the token and ID next."),
       ].join('\n'),
       'Create a Discord App',
     );
@@ -68,7 +68,7 @@ export async function runSetup(): Promise<void> {
     message: 'Paste your Discord Bot Token:',
     validate(value) {
       if (!value || !value.trim()) return 'Token is required';
-      if (value.length < 50) return 'That doesn\'t look like a valid bot token';
+      if (value.length < 50) return "That doesn't look like a valid bot token";
     },
   });
   if (p.isCancel(token)) cancelled();
@@ -89,7 +89,8 @@ export async function runSetup(): Promise<void> {
   // ─── Step 4: Guild ID ───
 
   const guildSetup = await p.confirm({
-    message: 'Do you want to register commands to a specific server? (instant, recommended for testing)',
+    message:
+      'Do you want to register commands to a specific server? (instant, recommended for testing)',
     initialValue: !!getConfigValue('DISCORD_GUILD_ID'),
   });
   if (p.isCancel(guildSetup)) cancelled();
@@ -162,7 +163,7 @@ export async function runSetup(): Promise<void> {
       initialValue: getConfigValue('ALLOWED_USERS'),
       validate(value) {
         if (!value || !value.trim()) return 'At least one user ID is required';
-        const ids = value.split(',').map(s => s.trim());
+        const ids = value.split(',').map((s) => s.trim());
         for (const id of ids) {
           if (!/^\d{17,20}$/.test(id)) return `Invalid user ID: ${id}`;
         }
@@ -214,7 +215,12 @@ export async function runSetup(): Promise<void> {
 
   if (openBrowser) {
     try {
-      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      const cmd =
+        process.platform === 'darwin'
+          ? 'open'
+          : process.platform === 'win32'
+            ? 'start'
+            : 'xdg-open';
       execSync(`${cmd} "${inviteUrl}"`, { stdio: 'ignore' });
     } catch {
       p.log.warn('Could not open browser. Please open the URL manually.');
@@ -287,10 +293,7 @@ export async function runSetup(): Promise<void> {
   ];
 
   if (!installDaemon) {
-    nextSteps.unshift(
-      `Start the bot:  ${cyan('threadcord')}`,
-      '',
-    );
+    nextSteps.unshift(`Start the bot:  ${cyan('threadcord')}`, '');
   } else {
     nextSteps.unshift(
       `The bot is running in the background.`,

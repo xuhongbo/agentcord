@@ -23,16 +23,43 @@ export type ProviderEvent =
   | { type: 'ask_user'; questionsJson: string }
   | { type: 'task'; action: string; dataJson: string }
   | { type: 'task_started'; taskId: string; description: string }
-  | { type: 'task_progress'; taskId: string; description: string; lastToolName?: string; summary?: string }
-  | { type: 'task_done'; taskId: string; status: 'completed' | 'failed' | 'stopped'; summary: string }
+  | {
+      type: 'task_progress';
+      taskId: string;
+      description: string;
+      lastToolName?: string;
+      summary?: string;
+    }
+  | {
+      type: 'task_done';
+      taskId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+    }
   | { type: 'image_file'; filePath: string }
-  | { type: 'command_execution'; command: string; output: string; exitCode: number | null; status: string }
-  | { type: 'file_change'; changes: Array<{ filePath: string; changeKind: 'add' | 'update' | 'delete' }> }
+  | {
+      type: 'command_execution';
+      command: string;
+      output: string;
+      exitCode: number | null;
+      status: string;
+    }
+  | {
+      type: 'file_change';
+      changes: Array<{ filePath: string; changeKind: 'add' | 'update' | 'delete' }>;
+    }
   | { type: 'web_search'; query: string }
   | { type: 'reasoning'; text: string }
   | { type: 'todo_list'; items: Array<{ text: string; completed: boolean }> }
   | { type: 'session_init'; providerSessionId: string }
-  | { type: 'result'; success: boolean; costUsd: number; durationMs: number; numTurns: number; errors: string[] }
+  | {
+      type: 'result';
+      success: boolean;
+      costUsd: number;
+      durationMs: number;
+      numTurns: number;
+      errors: string[];
+    }
   | { type: 'error'; message: string };
 
 // ── Provider Interface ──────────────────────────────────────────
@@ -61,9 +88,7 @@ export interface Provider {
     options: ProviderSessionOptions,
   ): AsyncGenerator<ProviderEvent>;
 
-  continueSession(
-    options: ProviderSessionOptions,
-  ): AsyncGenerator<ProviderEvent>;
+  continueSession(options: ProviderSessionOptions): AsyncGenerator<ProviderEvent>;
 
   supports(feature: string): boolean;
 }

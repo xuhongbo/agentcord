@@ -39,7 +39,7 @@ async function findOrCreateSessionChannel(
   fallbackName: string,
 ): Promise<TextChannel> {
   const existing = category.children.cache.find(
-    channel =>
+    (channel) =>
       channel.type === ChannelType.GuildText &&
       typeof channel.topic === 'string' &&
       channel.topic.includes(`Provider Session: ${providerSessionId}`),
@@ -63,12 +63,13 @@ async function syncPersistentSession(
   providerSessionId: string,
   labelHint: string,
 ): Promise<void> {
-  const base = labelHint
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60) || providerSessionId.slice(0, 12);
+  const base =
+    labelHint
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 60) || providerSessionId.slice(0, 12);
 
   const channel = await findOrCreateSessionChannel(
     guild,
@@ -94,17 +95,22 @@ async function runSync(client: Client): Promise<void> {
   const guild = client.guilds.cache.first();
   if (!guild) return;
 
-  const projects = getAllRegisteredProjects().filter(project => project.discordCategoryId);
+  const projects = getAllRegisteredProjects().filter((project) => project.discordCategoryId);
   if (projects.length === 0) return;
 
   const existingProviderIds = new Set(
-    sessions.getAllSessions().map(session => session.providerSessionId).filter(Boolean),
+    sessions
+      .getAllSessions()
+      .map((session) => session.providerSessionId)
+      .filter(Boolean),
   );
 
   try {
     const claudeSdk = await import('@anthropic-ai/claude-agent-sdk');
     for (const project of projects) {
-      const category = guild.channels.cache.get(project.discordCategoryId!) as CategoryChannel | undefined;
+      const category = guild.channels.cache.get(project.discordCategoryId!) as
+        | CategoryChannel
+        | undefined;
       if (!category || category.type !== ChannelType.GuildCategory) continue;
 
       try {
@@ -130,13 +136,15 @@ async function runSync(client: Client): Promise<void> {
     // Claude SDK unavailable
   }
 
-  const codexSessions = listCodexSessionsForProjects(projects.map(project => project.path));
+  const codexSessions = listCodexSessionsForProjects(projects.map((project) => project.path));
   for (const session of codexSessions) {
     if (existingProviderIds.has(session.id)) continue;
-    const project = projects.find(item => item.path === session.projectPath);
+    const project = projects.find((item) => item.path === session.projectPath);
     if (!project?.discordCategoryId) continue;
 
-    const category = guild.channels.cache.get(project.discordCategoryId) as CategoryChannel | undefined;
+    const category = guild.channels.cache.get(project.discordCategoryId) as
+      | CategoryChannel
+      | undefined;
     if (!category || category.type !== ChannelType.GuildCategory) continue;
 
     try {

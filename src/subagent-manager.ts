@@ -41,14 +41,14 @@ export async function spawnSubagent(
   });
 
   const session = await createSession({
-    channelId: thread.id,                         // Subagent's primary ID is the Thread
+    channelId: thread.id, // Subagent's primary ID is the Thread
     categoryId: parentSession.categoryId,
     projectName: parentSession.projectName,
     agentLabel: label,
     provider,
     directory: parentSession.directory,
     type: 'subagent',
-    parentChannelId: parentSession.channelId,     // Parent session's TextChannel
+    parentChannelId: parentSession.channelId, // Parent session's TextChannel
     subagentDepth: parentSession.subagentDepth + 1,
     mode: parentSession.mode,
   });
@@ -67,16 +67,22 @@ export async function archiveSubagent(
   if (summary) {
     try {
       await thread.send(`*Subagent complete: ${summary}*`);
-    } catch { /* thread may already be archived */ }
+    } catch {
+      /* thread may already be archived */
+    }
   }
 
   try {
     await thread.setArchived(true, 'Subagent task completed');
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 
   try {
     await endSession(session.id);
-  } catch { /* already ended */ }
+  } catch {
+    /* already ended */
+  }
 }
 
 /**
@@ -84,7 +90,7 @@ export async function archiveSubagent(
  */
 export function getSubagents(parentSession: ThreadSession): ThreadSession[] {
   return getAllSessions().filter(
-    s => s.type === 'subagent' && s.parentChannelId === parentSession.channelId,
+    (s) => s.type === 'subagent' && s.parentChannelId === parentSession.channelId,
   );
 }
 
@@ -117,5 +123,5 @@ export async function runSubagentWatchdog(
 }
 
 function getSubagentSessions(): ThreadSession[] {
-  return getAllSessions().filter(s => s.type === 'subagent');
+  return getAllSessions().filter((s) => s.type === 'subagent');
 }

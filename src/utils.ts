@@ -3,12 +3,14 @@ import { homedir } from 'node:os';
 
 // Sanitize a string into a valid Discord thread / session name
 export function sanitizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 50) || 'session';
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 50) || 'session'
+  );
 }
 
 // Resolve a path, expanding ~ to home directory
@@ -23,7 +25,7 @@ export function resolvePath(p: string): string {
 export function isPathAllowed(path: string, allowedPaths: readonly string[]): boolean {
   if (allowedPaths.length === 0) return true;
   const resolved = resolvePath(path);
-  return allowedPaths.some(allowed => {
+  return allowedPaths.some((allowed) => {
     const resolvedAllowed = resolvePath(allowed);
     return resolved === resolvedAllowed || resolved.startsWith(resolvedAllowed + '/');
   });
@@ -60,7 +62,11 @@ export function truncate(s: string, max: number): string {
 }
 
 // Check if a user is in the allowed list
-export function isUserAllowed(userId: string, allowedUsers: readonly string[], allowAll: boolean): boolean {
+export function isUserAllowed(
+  userId: string,
+  allowedUsers: readonly string[],
+  allowAll: boolean,
+): boolean {
   if (allowAll) return true;
   if (allowedUsers.length === 0) return true;
   return allowedUsers.includes(userId);
@@ -72,11 +78,11 @@ const ABORT_PATTERNS = ['abort', 'cancel', 'interrupt', 'killed', 'signal'];
 export function isAbortError(err: unknown): boolean {
   if (err instanceof Error && err.name === 'AbortError') return true;
   const msg = ((err as Error).message || '').toLowerCase();
-  return ABORT_PATTERNS.some(p => msg.includes(p));
+  return ABORT_PATTERNS.some((p) => msg.includes(p));
 }
 
 export function isAbortErrorMessage(messages: string[]): boolean {
-  return messages.some(m => ABORT_PATTERNS.some(p => m.toLowerCase().includes(p)));
+  return messages.some((m) => ABORT_PATTERNS.some((p) => m.toLowerCase().includes(p)));
 }
 
 export function detectNumberedOptions(text: string): string[] | null {
@@ -96,22 +102,27 @@ export function detectNumberedOptions(text: string): string[] | null {
   }
 
   if (options.length < 2 || options.length > 6) return null;
-  if (options.some(o => o.length > 80)) return null;
+  if (options.some((o) => o.length > 80)) return null;
 
-  const linesAfter = lines.slice(lastOptionLine + 1).filter(l => l.trim()).length;
+  const linesAfter = lines.slice(lastOptionLine + 1).filter((l) => l.trim()).length;
   if (linesAfter > 3) return null;
 
   const preamble = lines.slice(0, firstOptionLine).join(' ').toLowerCase();
-  const hasQuestion = /\?\s*$/.test(preamble.trim()) ||
-    /\b(which|choose|select|pick|prefer|would you like|how would you|what approach|option)\b/.test(preamble);
+  const hasQuestion =
+    /\?\s*$/.test(preamble.trim()) ||
+    /\b(which|choose|select|pick|prefer|would you like|how would you|what approach|option)\b/.test(
+      preamble,
+    );
 
   return hasQuestion ? options : null;
 }
 
 export function detectYesNoPrompt(text: string): boolean {
   const lower = text.toLowerCase();
-  return /\b(y\/n|yes\/no|confirm|proceed)\b/.test(lower) ||
-    /\?\s*$/.test(text.trim()) && /\b(should|would you|do you want|shall)\b/.test(lower);
+  return (
+    /\b(y\/n|yes\/no|confirm|proceed)\b/.test(lower) ||
+    (/\?\s*$/.test(text.trim()) && /\b(should|would you|do you want|shall)\b/.test(lower))
+  );
 }
 
 export function formatUptime(startTime: number): string {

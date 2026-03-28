@@ -18,8 +18,10 @@ import { config } from './config.ts';
 const MODE_PROMPTS: Record<SessionMode, string> = {
   auto: '',
   plan: 'You MUST use EnterPlanMode at the start of every task. Present your plan for user approval before making any code changes. Do not write or edit files until the user approves the plan.',
-  normal: 'Before performing destructive or significant operations (deleting files, running dangerous commands, making large refactors, writing to many files), use AskUserQuestion to confirm with the user first. Ask for explicit approval before proceeding with changes.',
-  monitor: 'This session is running in monitored autonomy mode. Treat the active user request as the task objective and keep working until it is fully satisfied. Do not stop at a partial implementation or ask the user for follow-up direction unless you are truly blocked by missing permissions, credentials, or required external information that you cannot obtain yourself. When you believe the task is complete, explain concisely what was finished and why it satisfies the request.',
+  normal:
+    'Before performing destructive or significant operations (deleting files, running dangerous commands, making large refactors, writing to many files), use AskUserQuestion to confirm with the user first. Ask for explicit approval before proceeding with changes.',
+  monitor:
+    'This session is running in monitored autonomy mode. Treat the active user request as the task objective and keep working until it is fully satisfied. Do not stop at a partial implementation or ask the user for follow-up direction unless you are truly blocked by missing permissions, credentials, or required external information that you cannot obtain yourself. When you believe the task is complete, explain concisely what was finished and why it satisfies the request.',
 };
 
 const MONITOR_SYSTEM_PROMPT = `You are a monitor agent supervising another coding agent.
@@ -95,7 +97,9 @@ export async function loadSessions(): Promise<void> {
     }
     if (sessions.has(s.channelId)) {
       cleaned = true;
-      console.warn(`Skipping duplicate persisted session "${s.id}" (channelId ${s.channelId} already loaded).`);
+      console.warn(
+        `Skipping duplicate persisted session "${s.id}" (channelId ${s.channelId} already loaded).`,
+      );
       continue;
     }
 
@@ -193,8 +197,8 @@ function saveSessionsImmediate(): Promise<void> {
 // ─── Create / CRUD ────────────────────────────────────────────────────────────
 
 export interface CreateSessionParams {
-  channelId: string;             // Session's own Discord channel (TextChannel) or thread ID
-  categoryId: string;            // Parent project category ID
+  channelId: string; // Session's own Discord channel (TextChannel) or thread ID
+  categoryId: string; // Parent project category ID
   projectName: string;
   agentLabel: string;
   provider: ProviderName;
@@ -202,7 +206,7 @@ export interface CreateSessionParams {
   providerSessionId?: string;
   model?: string;
   type: 'persistent' | 'subagent';
-  parentChannelId?: string;      // For subagents: parent session's TextChannel ID
+  parentChannelId?: string; // For subagents: parent session's TextChannel ID
   subagentDepth?: number;
   mode?: SessionMode;
   claudePermissionMode?: 'bypass' | 'normal';
@@ -398,9 +402,10 @@ export function updateWorkflowState(
   const session = getSession(sessionId);
   if (!session) return;
 
-  const next = typeof patch === 'function'
-    ? patch(session.workflowState)
-    : { ...session.workflowState, ...patch };
+  const next =
+    typeof patch === 'function'
+      ? patch(session.workflowState)
+      : { ...session.workflowState, ...patch };
 
   session.workflowState = {
     ...next,
@@ -463,8 +468,12 @@ function buildProviderOptions(
     networkAccessEnabled: config.codexNetworkAccessEnabled,
     webSearchMode: config.codexWebSearchMode,
     modelReasoningEffort: config.codexReasoningEffort || undefined,
-    claudePermissionMode: isAutoMode ? 'bypass' : (session.claudePermissionMode ?? config.claudePermissionMode),
-    systemPromptParts: isMonitor ? buildMonitorSystemPromptParts(session) : buildSystemPromptParts(session),
+    claudePermissionMode: isAutoMode
+      ? 'bypass'
+      : (session.claudePermissionMode ?? config.claudePermissionMode),
+    systemPromptParts: isMonitor
+      ? buildMonitorSystemPromptParts(session)
+      : buildSystemPromptParts(session),
     abortController: controller,
   };
 }
@@ -515,9 +524,7 @@ export async function* sendPrompt(
   }
 }
 
-export async function* continueSession(
-  sessionId: string,
-): AsyncGenerator<ProviderEvent> {
+export async function* continueSession(sessionId: string): AsyncGenerator<ProviderEvent> {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
   if (session.isGenerating) throw new Error('Session is already generating');

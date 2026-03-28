@@ -27,7 +27,13 @@ function makeOptions(subcommand: string, values: Record<string, string | null | 
   };
 }
 
-function makeInteraction(userId: string, guild: any, channel: any, subcommand: string, values: Record<string, string | null | undefined>) {
+function makeInteraction(
+  userId: string,
+  guild: { id: string },
+  channel: { id: string; guild?: { id: string } | null },
+  subcommand: string,
+  values: Record<string, string | null | undefined>,
+) {
   let lastReply: unknown;
   return {
     user: { id: userId, tag: 'threadcord-e2e#0001' },
@@ -37,10 +43,20 @@ function makeInteraction(userId: string, guild: any, channel: any, subcommand: s
     replied: false,
     deferred: false,
     options: makeOptions(subcommand, values),
-    async reply(payload: unknown) { lastReply = payload; return payload; },
-    async deferReply() { return; },
-    async editReply(payload: unknown) { lastReply = payload; return payload; },
-    async fetchReply() { return lastReply; },
+    async reply(payload: unknown) {
+      lastReply = payload;
+      return payload;
+    },
+    async deferReply() {
+      return;
+    },
+    async editReply(payload: unknown) {
+      lastReply = payload;
+      return payload;
+    },
+    async fetchReply() {
+      return lastReply;
+    },
   };
 }
 
@@ -54,7 +70,9 @@ await loadSessions();
 
 const project = getProjectByName('threadcord');
 if (!project?.discordCategoryId) {
-  throw new Error('Mounted project "threadcord" is not bound to a Discord category. Run /project setup first.');
+  throw new Error(
+    'Mounted project "threadcord" is not bound to a Discord category. Run /project setup first.',
+  );
 }
 
 const client = new Client({
@@ -90,26 +108,28 @@ try {
       provider: 'claude',
       mode: 'auto',
     });
-    await handleAgent(interaction as any);
+    await handleAgent(interaction);
   }
 
   const sessions = getSessionsByCategory(category.id).filter(
-    session => session.type === 'persistent' && createdLabels.includes(session.agentLabel),
+    (session) => session.type === 'persistent' && createdLabels.includes(session.agentLabel),
   );
 
   const report = {
     categoryId: category.id,
     categoryName: category.name,
     expectedArchitecture: '当前实现为 Category=Project, Channel=Session, Thread=Subagent',
-    userRequestedArchitectureCheck: '你提出“一个项目应该是个频道”，但当前代码实现并不是 Channel=Project，而是 Category=Project',
+    userRequestedArchitectureCheck:
+      '你提出“一个项目应该是个频道”，但当前代码实现并不是 Channel=Project，而是 Category=Project',
     createdLabels,
-    createdSessions: sessions.map(session => ({
+    createdSessions: sessions.map((session) => ({
       id: session.id,
       channelId: session.channelId,
       label: session.agentLabel,
       categoryId: session.categoryId,
     })),
-    passed: sessions.length === 2 && sessions.every(session => session.categoryId === category.id),
+    passed:
+      sessions.length === 2 && sessions.every((session) => session.categoryId === category.id),
   };
 
   writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');

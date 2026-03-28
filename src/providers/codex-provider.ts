@@ -1,18 +1,39 @@
 import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { config } from '../config.ts';
-import type {
-  Provider, ProviderEvent, ProviderSessionOptions, ContentBlock,
-} from './types.ts';
+import type { Provider, ProviderEvent, ProviderSessionOptions, ContentBlock } from './types.ts';
+import {
+  buildCodexOptions,
+  buildThreadOptions,
+  parseFileChanges,
+  parseTodoItems,
+} from './codex/helpers.ts';
+
+type InputPart = { type: string; text?: string; path?: string };
+type CodexEvent = {
+  type: string;
+  thread_id?: string;
+  item?: Record<string, unknown>;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  error?: string;
+  message?: string;
+};
+type CodexThread = {
+  runStreamed(input: string | InputPart[]): Promise<{ events: AsyncIterable<CodexEvent> }>;
+};
+type CodexClient = {
+  startThread(options: Record<string, unknown>): CodexThread;
+  resumeThread(sessionId: string, options: Record<string, unknown>): CodexThread;
+};
+type CodexConstructor = new (options: Record<string, unknown>) => CodexClient;
 
 // Lazy-loaded SDK constructor — populated on first use
-let Codex: any;
+let Codex: CodexConstructor | null = null;
 
 async function loadSdk(): Promise<void> {
   if (Codex) return;
   const mod = await import('@openai/codex-sdk');
-  Codex = mod.Codex;
+  Codex = mod.Codex as CodexConstructor;
 }
 
 // AGENTS.md sentinel for persona injection
@@ -28,9 +49,10 @@ function injectAgentsMd(directory: string, parts: string[]): string | null {
   let original: string | null = null;
   if (existsSync(agentsPath)) {
     original = readFileSync(agentsPath, 'utf-8');
-    // Remove any existing sentinel block before re-injecting
-    const cleaned = original
-      .replace(new RegExp(`${escapeRegex(SENTINEL_START)}[\\s\\S]*?${escapeRegex(SENTINEL_END)}\\n?`), '');
+    const cleaned = original.replace(
+      new RegExp(`${escapeRegex(SENTINEL_START)}[\\s\\S]*?${escapeRegex(SENTINEL_END)}\\n?`),
+      '',
+    );
     writeFileSync(agentsPath, cleaned + '\n' + injected + '\n', 'utf-8');
   } else {
     writeFileSync(agentsPath, injected + '\n', 'utf-8');
@@ -42,8 +64,11 @@ function injectAgentsMd(directory: string, parts: string[]): string | null {
 function restoreAgentsMd(directory: string, original: string | null): void {
   const agentsPath = join(directory, 'AGENTS.md');
   if (original === null) {
-    // We created the file — remove it
-    try { unlinkSync(agentsPath); } catch { /* may already be deleted */ }
+    try {
+      unlinkSync(agentsPath);
+    } catch {
+      /* may already be deleted */
+    }
   } else if (original !== undefined) {
     writeFileSync(agentsPath, original, 'utf-8');
   }
@@ -53,7 +78,10 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function writeImagesToTemp(blocks: ContentBlock[]): { textParts: string[]; localImages: Array<{ type: 'local_image'; path: string }> } {
+function writeImagesToTemp(blocks: ContentBlock[]): {
+  textParts: string[];
+  localImages: Array<{ type: 'local_image'; path: string }>;
+} {
   const textParts: string[] = [];
   const localImages: Array<{ type: 'local_image'; path: string }> = [];
 
@@ -61,7 +89,6 @@ function writeImagesToTemp(blocks: ContentBlock[]): { textParts: string[]; local
     if (block.type === 'text') {
       textParts.push(block.text);
     } else if (block.type === 'image') {
-      // Write base64 to a temp file
       const dir = mkdtempSync(join(tmpdir(), 'threadcord-img-'));
       const ext = block.source.media_type.split('/')[1] || 'png';
       const filePath = join(dir, `image.${ext}`);
@@ -79,10 +106,9 @@ export class CodexProvider implements Provider {
   readonly name = 'codex' as const;
 
   supports(feature: string): boolean {
-    return [
-      'command_execution', 'file_changes', 'reasoning',
-      'todo_list', 'continue',
-    ].includes(feature);
+    return ['command_execution', 'file_changes', 'reasoning', 'todo_list', 'continue'].includes(
+      feature,
+    );
   }
 
   async *sendPrompt(
@@ -91,67 +117,42 @@ export class CodexProvider implements Provider {
   ): AsyncGenerator<ProviderEvent> {
     await loadSdk();
 
-    // Build the input for Codex
-    let input: string | Array<{ type: string; text?: string; path?: string }>;
+    let input: string | InputPart[];
     if (typeof prompt === 'string') {
       input = prompt;
     } else {
       const { textParts, localImages } = writeImagesToTemp(prompt);
-      const inputParts: Array<{ type: string; text?: string; path?: string }> = [];
+      const inputParts: InputPart[] = [];
       for (const img of localImages) {
         inputParts.push({ type: 'local_image', path: img.path });
       }
       if (textParts.length > 0) {
         inputParts.push({ type: 'text', text: textParts.join('\n') });
       }
-      input = inputParts.length === 1 && inputParts[0].type === 'text'
-        ? inputParts[0].text!
-        : inputParts;
+      input =
+        inputParts.length === 1 && inputParts[0].type === 'text'
+          ? (inputParts[0].text ?? '')
+          : inputParts;
     }
 
-    // Inject system prompt parts into AGENTS.md
     let originalAgents: string | null = null;
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
-
-      const codexOpts: Record<string, any> = {};
-      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
-      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
-      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
-      const codex = new Codex(codexOpts);
-
-      const threadOptions: Record<string, any> = {
-        workingDirectory: options.directory,
-        skipGitRepoCheck: true,
-      };
-      if (options.model) threadOptions.model = options.model;
-      if (options.sandboxMode) threadOptions.sandboxMode = options.sandboxMode;
-      if (options.approvalPolicy) threadOptions.approvalPolicy = options.approvalPolicy;
-      if (options.networkAccessEnabled !== undefined) {
-        threadOptions.networkAccessEnabled = options.networkAccessEnabled;
-      }
-      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
-        threadOptions.webSearchMode = options.webSearchMode;
-      }
-      if (options.modelReasoningEffort) {
-        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
-      }
+      const codex = new Codex!(buildCodexOptions());
+      const threadOptions = buildThreadOptions(options);
 
       const thread = options.providerSessionId
         ? codex.resumeThread(options.providerSessionId, threadOptions)
         : codex.startThread(threadOptions);
 
       const { events } = await thread.runStreamed(input);
-
       yield* this.translateEvents(events, options.abortController);
     } finally {
       restoreAgentsMd(options.directory, originalAgents);
     }
   }
 
-  async *continueSession(
-    options: ProviderSessionOptions,
-  ): AsyncGenerator<ProviderEvent> {
+  async *continueSession(options: ProviderSessionOptions): AsyncGenerator<ProviderEvent> {
     await loadSdk();
 
     if (!options.providerSessionId) {
@@ -162,31 +163,9 @@ export class CodexProvider implements Provider {
     let originalAgents: string | null = null;
     try {
       originalAgents = injectAgentsMd(options.directory, options.systemPromptParts);
-
-      const codexOpts: Record<string, any> = {};
-      if (config.codexApiKey) codexOpts.apiKey = config.codexApiKey;
-      if (config.codexBaseUrl) codexOpts.baseUrl = config.codexBaseUrl;
-      if (config.codexPath) codexOpts.codexPathOverride = config.codexPath;
-      const codex = new Codex(codexOpts);
-      const threadOptions: Record<string, any> = {
-        workingDirectory: options.directory,
-        skipGitRepoCheck: true,
-      };
-      if (options.model) threadOptions.model = options.model;
-      if (options.sandboxMode) threadOptions.sandboxMode = options.sandboxMode;
-      if (options.approvalPolicy) threadOptions.approvalPolicy = options.approvalPolicy;
-      if (options.networkAccessEnabled !== undefined) {
-        threadOptions.networkAccessEnabled = options.networkAccessEnabled;
-      }
-      if (options.webSearchMode && options.webSearchMode !== 'disabled') {
-        threadOptions.webSearchMode = options.webSearchMode;
-      }
-      if (options.modelReasoningEffort) {
-        threadOptions.modelReasoningEffort = options.modelReasoningEffort;
-      }
-      const thread = codex.resumeThread(options.providerSessionId, threadOptions);
+      const codex = new Codex!(buildCodexOptions());
+      const thread = codex.resumeThread(options.providerSessionId, buildThreadOptions(options));
       const { events } = await thread.runStreamed('Continue from where you left off.');
-
       yield* this.translateEvents(events, options.abortController);
     } finally {
       restoreAgentsMd(options.directory, originalAgents);
@@ -194,42 +173,38 @@ export class CodexProvider implements Provider {
   }
 
   private async *translateEvents(
-    events: AsyncIterable<any>,
+    events: AsyncIterable<CodexEvent>,
     abortController: AbortController,
   ): AsyncGenerator<ProviderEvent> {
-    // Track partial text for agent_message items to only yield deltas
     const messageText = new Map<string, string>();
     const startTime = Date.now();
 
     try {
       for await (const event of events) {
-        // Check for abort
         if (abortController.signal.aborted) break;
 
         switch (event.type) {
           case 'thread.started':
-            yield { type: 'session_init', providerSessionId: event.thread_id };
+            yield { type: 'session_init', providerSessionId: event.thread_id || '' };
             break;
 
           case 'item.started':
           case 'item.updated': {
             const item = event.item;
             if (!item) break;
-
             if (item.type === 'agent_message') {
-              const prev = messageText.get(item.id) || '';
-              const text = item.text || '';
+              const itemId = String(item.id || '');
+              const prev = messageText.get(itemId) || '';
+              const text = String(item.text || '');
               if (text.length > prev.length) {
                 yield { type: 'text_delta', text: text.slice(prev.length) };
-                messageText.set(item.id, text);
+                messageText.set(itemId, text);
               }
             }
 
             if (item.type === 'reasoning' && event.type === 'item.updated') {
-              const text = item.summary || item.content || '';
-              if (text) {
-                yield { type: 'reasoning', text };
-              }
+              const text = String(item.summary || item.content || '');
+              if (text) yield { type: 'reasoning', text };
             }
             break;
           }
@@ -240,78 +215,74 @@ export class CodexProvider implements Provider {
 
             switch (item.type) {
               case 'agent_message': {
-                // Emit any remaining text delta
-                const prev = messageText.get(item.id) || '';
-                const text = item.text || '';
+                const itemId = String(item.id || '');
+                const prev = messageText.get(itemId) || '';
+                const text = String(item.text || '');
                 if (text.length > prev.length) {
                   yield { type: 'text_delta', text: text.slice(prev.length) };
                 }
-                messageText.delete(item.id);
+                messageText.delete(itemId);
                 break;
               }
 
               case 'command_execution':
                 yield {
                   type: 'command_execution',
-                  command: item.command || '',
-                  output: item.aggregated_output ?? item.output ?? '',
-                  exitCode: item.exit_code ?? item.exitCode ?? null,
-                  status: item.status || 'completed',
+                  command: String(item.command || ''),
+                  output: String(item.aggregated_output ?? item.output ?? ''),
+                  exitCode:
+                    typeof item.exit_code === 'number'
+                      ? item.exit_code
+                      : typeof item.exitCode === 'number'
+                        ? item.exitCode
+                        : null,
+                  status: String(item.status || 'completed'),
                 };
                 break;
 
               case 'file_change': {
-                const changes = (item.changes || item.files || []).map((f: any) => ({
-                  filePath: f.path || f.file_path || f.filePath || '',
-                  changeKind: (f.kind || f.change_kind || f.changeKind || 'update') as 'add' | 'update' | 'delete',
-                }));
-                if (changes.length > 0) {
-                  yield { type: 'file_change', changes };
-                }
+                const changes = parseFileChanges(item);
+                if (changes.length > 0) yield { type: 'file_change', changes };
                 break;
               }
 
               case 'reasoning': {
-                const text = item.summary || item.content || '';
-                if (text) {
-                  yield { type: 'reasoning', text };
-                }
+                const text = String(item.summary || item.content || '');
+                if (text) yield { type: 'reasoning', text };
                 break;
               }
 
               case 'todo_list': {
-                const items = (item.items || item.todos || []).map((t: any) => ({
-                  text: t.text || t.description || '',
-                  completed: t.completed ?? t.done ?? false,
-                }));
-                if (items.length > 0) {
-                  yield { type: 'todo_list', items };
-                }
+                const items = parseTodoItems(item);
+                if (items.length > 0) yield { type: 'todo_list', items };
                 break;
               }
 
               case 'mcp_tool_call':
                 yield {
                   type: 'tool_start',
-                  toolName: `${item.server}/${item.tool}`,
+                  toolName: `${String(item.server || '')}/${String(item.tool || '')}`,
                   toolInput: JSON.stringify(item.arguments || item.input || {}),
                 };
                 if (item.status === 'completed' || item.status === 'failed') {
                   yield {
                     type: 'tool_result',
-                    toolName: `${item.server}/${item.tool}`,
-                    result: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || ''),
+                    toolName: `${String(item.server || '')}/${String(item.tool || '')}`,
+                    result:
+                      typeof item.output === 'string'
+                        ? item.output
+                        : JSON.stringify(item.output || ''),
                     isError: item.status === 'failed',
                   };
                 }
                 break;
 
               case 'web_search':
-                yield { type: 'web_search', query: item.query || '' };
+                yield { type: 'web_search', query: String(item.query || '') };
                 break;
 
               case 'error':
-                yield { type: 'error', message: item.message || 'Unknown error' };
+                yield { type: 'error', message: String(item.message || 'Unknown error') };
                 break;
             }
             break;
@@ -321,9 +292,7 @@ export class CodexProvider implements Provider {
             const usage = event.usage;
             const inputTokens = usage?.input_tokens || 0;
             const outputTokens = usage?.output_tokens || 0;
-            // Rough cost estimate based on typical Codex pricing
             const costUsd = (inputTokens * 2 + outputTokens * 8) / 1_000_000;
-
             yield {
               type: 'result',
               success: true,
