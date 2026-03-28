@@ -57,8 +57,9 @@ function acquireLock(): boolean {
         console.error(`[bot] Another instance is already running (PID ${pid}). Exiting.`);
         return false;
       }
+      console.log(`[bot] Stale lock found (PID ${pid} not running), removing.`);
     } catch {
-      /* stale lock file */
+      console.log('[bot] Stale lock file found (unreadable), removing.');
     }
     // Stale lock — remove it
     try {
@@ -68,6 +69,7 @@ function acquireLock(): boolean {
     }
   }
   writeFileSync(LOCK_FILE, process.pid.toString(), 'utf-8');
+  console.log(`[bot] Lock acquired (PID ${process.pid}).`);
   return true;
 }
 
@@ -166,6 +168,7 @@ async function cleanupOldMessages(): Promise<void> {
 }
 
 export async function startBot(): Promise<void> {
+  console.log(`[bot] Starting bot (PID ${process.pid})...`);
   if (!acquireLock()) {
     process.exit(1);
   }
@@ -183,6 +186,17 @@ export async function startBot(): Promise<void> {
 
   // Slash command / button interactions
   client.on('interactionCreate', async (interaction) => {
+    const interactionDesc =
+      interaction.isChatInputCommand()
+        ? `slash:/${interaction.commandName}`
+        : interaction.isButton()
+          ? `button:${interaction.customId}`
+          : interaction.isStringSelectMenu()
+            ? `select:${interaction.customId}`
+            : `type:${interaction.type}`;
+    const userId = interaction.user?.id ?? 'unknown';
+    console.log(`[interaction] Received ${interactionDesc} from user ${userId}`);
+
     try {
       if (
         interaction.type === InteractionType.ApplicationCommand &&
@@ -206,6 +220,8 @@ export async function startBot(): Promise<void> {
             return await handleEndShortcut(interaction);
           case 'run':
             return await handleRunShortcut(interaction);
+          default:
+            console.warn(`[interaction] Unknown command: ${interaction.commandName}`);
         }
       }
 
@@ -217,7 +233,9 @@ export async function startBot(): Promise<void> {
         return await handleSelectMenu(interaction);
       }
     } catch (err) {
-      console.error('Interaction error:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[interaction] Error handling ${interactionDesc}:`, err);
+      botLog(`Interaction error (${interactionDesc}): ${errMsg}`);
       try {
         if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: 'An error occurred.', ephemeral: true });
@@ -253,11 +271,15 @@ export async function startBot(): Promise<void> {
 
   // Bot ready
   client.once('ready', async () => {
-    console.log(`Logged in as ${client.user?.tag}`);
+    console.log(`[bot] Logged in as ${client.user?.tag} (${client.user?.id})`);
 
+    console.log('[bot] Registering commands...');
     await registerCommands();
+    console.log('[bot] Loading projects...');
     await loadProjects();
+    console.log('[bot] Loading sessions...');
     await loadSessions();
+    console.log('[bot] Loading archived sessions...');
     await loadArchived();
 
     // Find or create #bot-logs channel at the server root (no category)
@@ -384,8 +406,9 @@ export async function startBot(): Promise<void> {
   });
 
   process.on('uncaughtException', async (err) => {
-    console.error('Uncaught exception:', err);
-    botLog(`Uncaught exception: ${err.message} — restarting`);
+    console.error('[bot] Uncaught exception:', err);
+    console.error('[bot] Stack:', err.stack);
+    botLog(`Uncaught exception: ${err.message}\nStack: ${err.stack ?? '(no stack)'}`);
     await flushLogs();
     releaseLock();
     process.exit(1);
@@ -393,8 +416,10 @@ export async function startBot(): Promise<void> {
 
   process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    console.error('Unhandled rejection:', reason);
-    botLog(`Unhandled rejection: ${msg}`);
+    const stack = reason instanceof Error ? reason.stack : undefined;
+    console.error('[bot] Unhandled rejection:', reason);
+    if (stack) console.error('[bot] Stack:', stack);
+    botLog(`Unhandled rejection: ${msg}${stack ? `\nStack: ${stack}` : ''}`);
   });
 
   await client.login(config.token);

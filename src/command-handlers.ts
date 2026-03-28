@@ -48,6 +48,9 @@ const MODE_LABELS: Record<SessionMode, string> = {
 
 function assertUserAllowed(interaction: ChatInputCommandInteraction): boolean {
   if (!isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers)) {
+    log(
+      `[auth] User ${interaction.user.tag} (${interaction.user.id}) denied for /${interaction.commandName}`,
+    );
     interaction.reply({ content: 'You are not authorized to use this bot.', ephemeral: true });
     return false;
   }
@@ -77,6 +80,7 @@ function resolveProjectCategoryId(interaction: ChatInputCommandInteraction): str
 export async function handleProject(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!assertUserAllowed(interaction)) return;
   const sub = interaction.options.getSubcommand();
+  log(`[cmd] /project ${sub} by ${interaction.user.tag} in channel ${interaction.channelId}`);
 
   switch (sub) {
     case 'setup':
@@ -398,6 +402,7 @@ async function handleProjectMcpList(interaction: ChatInputCommandInteraction): P
 export async function handleAgent(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!assertUserAllowed(interaction)) return;
   const sub = interaction.options.getSubcommand();
+  log(`[cmd] /agent ${sub} by ${interaction.user.tag} in channel ${interaction.channelId}`);
 
   switch (sub) {
     case 'spawn':
@@ -428,8 +433,13 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
 }
 
 async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promise<void> {
+  log(
+    `[spawn] Starting spawn for user ${interaction.user.tag} in channel ${interaction.channelId}`,
+  );
+
   // Must be in a TextChannel (not inside a thread)
   if (interaction.channel?.isThread()) {
+    log(`[spawn] Rejected: channel is a thread`);
     await interaction.reply({
       content: 'Run `/agent spawn` in a project channel, not inside a thread.',
       ephemeral: true,
@@ -439,6 +449,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
 
   const categoryId = (interaction.channel as TextChannel)?.parentId;
   if (!categoryId) {
+    log(`[spawn] Rejected: channel has no parent category`);
     await interaction.reply({
       content: 'This channel is not under a Category. Run `/project setup` first.',
       ephemeral: true,
@@ -448,6 +459,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
 
   const project = projectMgr.getProject(categoryId);
   if (!project) {
+    log(`[spawn] Rejected: no project found for category ${categoryId}`);
     await interaction.reply({
       content: 'No project set up for this category. Run `/project setup` first.',
       ephemeral: true,
@@ -463,7 +475,13 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     config.claudePermissionMode) as 'bypass' | 'normal';
   const directory = interaction.options.getString('directory') || project.directory;
 
+  log(
+    `[spawn] Params: label="${label}" provider=${provider} mode=${mode} dir=${directory} project=${project.name}`,
+  );
+
+  log(`[spawn] Calling deferReply...`);
   await interaction.deferReply();
+  log(`[spawn] deferReply done`);
 
   const guild = interaction.guild!;
 
@@ -472,6 +490,7 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .slice(0, 100);
+  log(`[spawn] Creating channel "${channelName}" under category ${categoryId}...`);
   let sessionChannel: TextChannel;
   try {
     sessionChannel = await guild.channels.create({
@@ -481,12 +500,15 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       topic: `[${PROVIDER_LABELS[provider]}] ${label}`,
       reason: `Agent session spawned by ${interaction.user.tag}`,
     });
+    log(`[spawn] Channel created: ${sessionChannel.id}`);
   } catch (err: unknown) {
+    log(`[spawn] Failed to create channel: ${(err as Error).message}`);
     await interaction.editReply(`Failed to create session channel: ${(err as Error).message}`);
     return;
   }
 
   // Create session record
+  log(`[spawn] Creating session record...`);
   let session;
   try {
     session = await sessionMgr.createSession({
@@ -500,7 +522,9 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       mode,
       claudePermissionMode: provider === 'claude' ? claudePermissionMode : undefined,
     });
+    log(`[spawn] Session created: ${session.id}`);
   } catch (err: unknown) {
+    log(`[spawn] Failed to create session: ${(err as Error).message}`);
     // Clean up channel if session creation fails
     await sessionChannel.delete('Session creation failed').catch(() => {});
     await interaction.editReply(`Failed to create session: ${(err as Error).message}`);
@@ -762,6 +786,7 @@ async function handleAgentContinue(interaction: ChatInputCommandInteraction): Pr
 export async function handleSubagent(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!assertUserAllowed(interaction)) return;
   const sub = interaction.options.getSubcommand();
+  log(`[cmd] /subagent ${sub} by ${interaction.user.tag} in channel ${interaction.channelId}`);
 
   switch (sub) {
     case 'run':
@@ -864,6 +889,7 @@ export async function handleShell(interaction: ChatInputCommandInteraction): Pro
     return;
   }
   const sub = interaction.options.getSubcommand();
+  log(`[cmd] /shell ${sub} by ${interaction.user.tag} in channel ${interaction.channelId}`);
 
   switch (sub) {
     case 'run':

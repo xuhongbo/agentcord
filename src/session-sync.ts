@@ -93,10 +93,18 @@ async function syncPersistentSession(
 
 async function runSync(client: Client): Promise<void> {
   const guild = client.guilds.cache.first();
-  if (!guild) return;
+  if (!guild) {
+    console.log('[sync] No guild found, skipping sync.');
+    return;
+  }
 
   const projects = getAllRegisteredProjects().filter((project) => project.discordCategoryId);
-  if (projects.length === 0) return;
+  if (projects.length === 0) {
+    console.log('[sync] No mounted projects with Discord categories, skipping sync.');
+    return;
+  }
+
+  console.log(`[sync] Starting sync for ${projects.length} project(s)...`);
 
   const existingProviderIds = new Set(
     sessions
@@ -107,11 +115,15 @@ async function runSync(client: Client): Promise<void> {
 
   try {
     const claudeSdk = await import('@anthropic-ai/claude-agent-sdk');
+    let claudeSynced = 0;
     for (const project of projects) {
       const category = guild.channels.cache.get(project.discordCategoryId!) as
         | CategoryChannel
         | undefined;
-      if (!category || category.type !== ChannelType.GuildCategory) continue;
+      if (!category || category.type !== ChannelType.GuildCategory) {
+        console.log(`[sync] Project "${project.name}": category ${project.discordCategoryId} not found in guild cache, skipping.`);
+        continue;
+      }
 
       try {
         const claudeSessions = await claudeSdk.listSessions({ dir: project.path, limit: 50 });
@@ -127,16 +139,20 @@ async function runSync(client: Client): Promise<void> {
             item.summary || item.firstPrompt || item.sessionId,
           );
           existingProviderIds.add(item.sessionId);
+          claudeSynced++;
         }
-      } catch {
-        // skip one mounted project
+      } catch (err) {
+        console.warn(`[sync] Failed to sync Claude sessions for project "${project.name}":`, err);
       }
     }
-  } catch {
-    // Claude SDK unavailable
+    console.log(`[sync] Claude: synced ${claudeSynced} new session(s).`);
+  } catch (err) {
+    console.log('[sync] Claude SDK unavailable, skipping Claude session sync.', err);
   }
 
   const codexSessions = listCodexSessionsForProjects(projects.map((project) => project.path));
+  console.log(`[sync] Codex: found ${codexSessions.length} local session(s).`);
+  let codexSynced = 0;
   for (const session of codexSessions) {
     if (existingProviderIds.has(session.id)) continue;
     const project = projects.find((item) => item.path === session.projectPath);
@@ -158,8 +174,11 @@ async function runSync(client: Client): Promise<void> {
         session.threadName,
       );
       existingProviderIds.add(session.id);
-    } catch {
-      // skip one codex session
+      codexSynced++;
+    } catch (err) {
+      console.warn(`[sync] Failed to sync Codex session ${session.id}:`, err);
     }
   }
+  console.log(`[sync] Codex: synced ${codexSynced} new session(s).`);
+  console.log(`[sync] Sync complete.`);
 }
