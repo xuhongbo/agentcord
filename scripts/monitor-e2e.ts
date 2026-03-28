@@ -23,22 +23,28 @@ sessions.setMonitorGoal(
 );
 
 const sentMessages: string[] = [];
+type MessagePayload =
+  | string
+  | {
+      content?: string;
+      embeds?: Array<{ data?: { title?: string; description?: string } }>;
+    };
 const channel = {
   topic: null as string | null,
-  async send(payload: any) {
+  async send(payload: MessagePayload) {
     const text =
       typeof payload === 'string'
         ? payload
         : payload?.content
           ? String(payload.content)
           : payload?.embeds
-              ?.map((e: any) => `${e.data?.title || ''}\n${e.data?.description || ''}`)
+              ?.map((e) => `${e.data?.title || ''}\n${e.data?.description || ''}`)
               .join('\n') || JSON.stringify(payload);
     sentMessages.push(text);
     process.stdout.write(`\n--- CHANNEL SEND ---\n${text}\n`);
     return {
       content: text,
-      async edit(next: any) {
+      async edit(next: MessagePayload) {
         const edited = typeof next === 'string' ? next : next?.content || JSON.stringify(next);
         sentMessages.push(String(edited));
       },
@@ -58,7 +64,7 @@ let runError: string | null = null;
 
 try {
   await Promise.race([
-    executeSessionPrompt(sessions.getSession(session.id)!, channel as any, prompt, {
+    executeSessionPrompt(sessions.getSession(session.id)!, channel, prompt, {
       updateMonitorGoal: true,
     }),
     new Promise((_, reject) =>

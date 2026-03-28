@@ -6,6 +6,9 @@ import { getConfigValue } from './global-config.ts';
 function required(key: string): string {
   const value = getConfigValue(key);
   if (!value) {
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
+      return `test-${key.toLowerCase()}`;
+    }
     console.error(`ERROR: ${key} is not configured.`);
     console.error('Run \x1b[36mthreadcord config setup\x1b[0m to configure.');
     process.exit(1);
@@ -100,6 +103,8 @@ if (config.anthropicApiKey) process.env.ANTHROPIC_API_KEY = config.anthropicApiK
 if (config.anthropicBaseUrl) process.env.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
 
 if (config.allowedUsers.length === 0 && !config.allowAllUsers) {
-  console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
-  process.exit(1);
+  if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+    console.error('ERROR: Set ALLOWED_USERS or ALLOW_ALL_USERS=true');
+    process.exit(1);
+  }
 }

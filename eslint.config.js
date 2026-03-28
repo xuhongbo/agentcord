@@ -24,7 +24,7 @@ export default tseslint.config(
       'no-undef': 'off',
       'no-useless-assignment': 'off',
       'preserve-caught-error': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': 'off',
     },
   },

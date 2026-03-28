@@ -70,8 +70,8 @@ function makeOptions(subcommand: string, values: OptionMap) {
 function makeInteraction(
   userId: string,
   userTag: string,
-  guild: any,
-  channel: any,
+  guild: { id: string; name?: string },
+  channel: { id: string; guild?: { id: string } | null },
   subcommand: string,
   values: OptionMap,
 ) {
@@ -217,7 +217,7 @@ try {
     const interaction = makeInteraction(actorId, actorTag, guild, bootstrapChannel, 'setup', {
       project: projectName,
     });
-    await handleProject(interaction as any);
+    await handleProject(interaction);
     step(report, 'project-setup', 'passed', `已将 Category 绑定到挂载项目 ${projectName}`);
   } else {
     step(report, 'project-setup', 'skipped', '项目已存在 Discord 绑定，跳过重复绑定');
@@ -233,7 +233,7 @@ try {
     provider: 'claude',
     mode: 'auto',
   });
-  await handleAgent(spawnInteraction as any);
+  await handleAgent(spawnInteraction);
 
   const mainSession = getSessionsByCategory(category.id).find(
     (session) => session.type === 'persistent' && session.agentLabel === mainLabel,
@@ -251,7 +251,7 @@ try {
     label: subLabel,
     provider: 'claude',
   });
-  await handleSubagent(subInteraction as any);
+  await handleSubagent(subInteraction);
 
   const subagent = getSessionsByCategory(category.id).find(
     (session) => session.type === 'subagent' && session.agentLabel === subLabel,
@@ -315,7 +315,7 @@ try {
 
   const archivedBefore = getArchivedSessions(category.id).length;
   const archiveInteraction = makeInteraction(actorId, actorTag, guild, mainChannel, 'archive', {});
-  await withTimeout(handleAgent(archiveInteraction as any), 15000, 'agent-archive');
+  await withTimeout(handleAgent(archiveInteraction), 15000, 'agent-archive');
   const archivedAfter = getArchivedSessions(category.id).length;
   if (archivedAfter <= archivedBefore) {
     throw new Error('归档记录未增加');

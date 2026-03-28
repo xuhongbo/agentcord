@@ -79,7 +79,7 @@ describe('session-sync', () => {
       },
     };
 
-    startSync(client as any);
+    startSync(client as Parameters<typeof startSync>[0]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     stopSync();
 

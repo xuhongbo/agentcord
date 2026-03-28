@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { handleOutputStream } from '../src/output-handler.ts';
 import type { ProviderEvent } from '../src/providers/types.ts';
+type ChannelPayload = string | { content?: string };
 
 class FakeMessage {
   content = '';
@@ -18,11 +19,11 @@ class FakeMessage {
 }
 
 function createFakeChannel() {
-  const sent: any[] = [];
+  const sent: ChannelPayload[] = [];
 
   return {
     sent,
-    async send(payload: any): Promise<FakeMessage> {
+    async send(payload: ChannelPayload): Promise<FakeMessage> {
       sent.push(payload);
       const message = new FakeMessage();
       if (typeof payload === 'string') {
@@ -59,7 +60,7 @@ describe('handleOutputStream', () => {
         { type: 'text_delta', text: longText },
         { type: 'tool_start', toolName: 'Read', toolInput: '{}' },
       ]),
-      channel as any,
+      channel as Parameters<typeof handleOutputStream>[1],
       'session-1',
     );
 
@@ -77,7 +78,7 @@ describe('handleOutputStream', () => {
         { type: 'text_delta', text: 'Completed the requested change.' },
         { type: 'result', success: true, costUsd: 0, durationMs: 25, numTurns: 1, errors: [] },
       ]),
-      channel as any,
+      channel as Parameters<typeof handleOutputStream>[1],
       'session-2',
     );
 

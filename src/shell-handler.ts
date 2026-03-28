@@ -47,7 +47,7 @@ export async function executeShellCommand(
     pid,
     command,
     startedAt: Date.now(),
-    process: child as any,
+    process: child as unknown as ShellProcess['process'],
   };
 
   runningProcesses.set(pid, shellProcess);

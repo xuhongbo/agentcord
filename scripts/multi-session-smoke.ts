@@ -29,8 +29,8 @@ function makeOptions(subcommand: string, values: Record<string, string | null | 
 
 function makeInteraction(
   userId: string,
-  guild: any,
-  channel: any,
+  guild: { id: string },
+  channel: { id: string; guild?: { id: string } | null },
   subcommand: string,
   values: Record<string, string | null | undefined>,
 ) {
@@ -108,7 +108,7 @@ try {
       provider: 'claude',
       mode: 'auto',
     });
-    await handleAgent(interaction as any);
+    await handleAgent(interaction);
   }
 
   const sessions = getSessionsByCategory(category.id).filter(
