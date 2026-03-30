@@ -8,7 +8,7 @@ import {
   type CategoryChannel,
 } from 'discord.js';
 import { config } from '../src/config.ts';
-import { handleAgent } from '../src/command-handlers.ts';
+import { handleAgent, handleProject } from '../src/command-handlers.ts';
 import { getProjectByName } from '../src/project-registry.ts';
 import { loadRegistry } from '../src/project-registry.ts';
 import { loadProjects } from '../src/project-manager.ts';
@@ -88,12 +88,19 @@ if (!category || category.type !== ChannelType.GuildCategory) {
   throw new Error('Bound category not found in guild');
 }
 
-const controlChannel = await guild.channels.create({
-  name: `multi-session-control-${Date.now().toString().slice(-4)}`,
-  type: ChannelType.GuildText,
-  parent: category.id,
-  reason: 'threadcord multi-session smoke test',
-});
+const existingControl =
+  project.controlChannelId &&
+  ((await guild.channels.fetch(project.controlChannelId).catch(() => null)) as TextChannel | null);
+
+const controlChannel =
+  existingControl?.type === ChannelType.GuildText
+    ? existingControl
+    : await guild.channels.create({
+        name: `multi-session-control-${Date.now().toString().slice(-4)}`,
+        type: ChannelType.GuildText,
+        parent: category.id,
+        reason: 'threadcord multi-session smoke test',
+      });
 
 const actorId = config.allowedUsers[0] || 'integration-e2e-user';
 const createdLabels = [
@@ -102,6 +109,13 @@ const createdLabels = [
 ];
 
 try {
+  if (!existingControl) {
+    const setupInteraction = makeInteraction(actorId, guild, controlChannel, 'setup', {
+      project: 'threadcord',
+    });
+    await handleProject(setupInteraction as never);
+  }
+
   for (const label of createdLabels) {
     const interaction = makeInteraction(actorId, guild, controlChannel, 'spawn', {
       label,
@@ -135,7 +149,9 @@ try {
   writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } finally {
-  await controlChannel.delete('threadcord multi-session smoke cleanup').catch(() => {});
+  if (!existingControl) {
+    await controlChannel.delete('threadcord multi-session smoke cleanup').catch(() => {});
+  }
   client.destroy();
   process.exit(0);
 }

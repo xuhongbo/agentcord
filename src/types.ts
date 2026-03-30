@@ -109,6 +109,7 @@ export interface McpServer {
 export interface Project {
   categoryId: string; // Discord Category ID (primary key)
   historyChannelId?: string; // Forum channel ID for archived sessions
+  controlChannelId?: string; // Dedicated text channel for spawning new sessions
   name: string; // Project name (= category name)
   directory: string; // Default working directory
   personality?: string; // Shared system prompt for all agents in this project

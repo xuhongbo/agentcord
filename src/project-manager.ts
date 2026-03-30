@@ -8,6 +8,7 @@ import {
   getProjectByCategoryId as getRegisteredProjectByCategoryId,
   bindProjectCategory,
   setProjectHistoryChannel,
+  setProjectControlChannel,
   updateProject,
 } from './project-registry.ts';
 import type { Project, Skill, McpServer } from './types.ts';
@@ -22,6 +23,7 @@ function toProject(projectName: string): Project | undefined {
   return {
     categoryId: project.discordCategoryId ?? '',
     historyChannelId: project.historyChannelId,
+    controlChannelId: project.controlChannelId,
     name: project.name,
     directory: project.path,
     personality: project.personality,
@@ -37,6 +39,7 @@ export function getProject(categoryId: string): Project | undefined {
   return {
     categoryId: project.discordCategoryId ?? categoryId,
     historyChannelId: project.historyChannelId,
+    controlChannelId: project.controlChannelId,
     name: project.name,
     directory: project.path,
     personality: project.personality,
@@ -57,6 +60,7 @@ export function getAllProjects(): Record<string, Project> {
     out[project.discordCategoryId] = {
       categoryId: project.discordCategoryId,
       historyChannelId: project.historyChannelId,
+      controlChannelId: project.controlChannelId,
       name: project.name,
       directory: project.path,
       personality: project.personality,
@@ -88,8 +92,18 @@ export function setHistoryChannelId(categoryId: string, channelId: string): void
   void setProjectHistoryChannel(project.name, channelId);
 }
 
+export function setControlChannelId(categoryId: string, channelId: string): void {
+  const project = getRegisteredProjectByCategoryId(categoryId);
+  if (!project) return;
+  void setProjectControlChannel(project.name, channelId);
+}
+
 export function getHistoryChannelId(categoryId: string): string | undefined {
   return getRegisteredProjectByCategoryId(categoryId)?.historyChannelId;
+}
+
+export function getControlChannelId(categoryId: string): string | undefined {
+  return getRegisteredProjectByCategoryId(categoryId)?.controlChannelId;
 }
 
 export function setPersonality(categoryId: string, personality: string): void {

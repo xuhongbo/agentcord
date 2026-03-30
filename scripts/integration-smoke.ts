@@ -149,6 +149,7 @@ let client: Client | null = null;
 let bootstrapChannel: TextChannel | null = null;
 let tempCategory: CategoryChannel | null = null;
 let cleanupBinding = false;
+let existingControl: TextChannel | null = null;
 
 try {
   await loadRegistry();
@@ -202,23 +203,34 @@ try {
 
   report.categoryId = category.id;
 
-  bootstrapChannel = await guild.channels.create({
-    name: `e2e-control-${Date.now().toString().slice(-4)}`,
-    type: ChannelType.GuildText,
-    parent: category.id,
-    reason: 'threadcord integration smoke test bootstrap channel',
-  });
-  step(report, 'create-bootstrap-channel', 'passed', `创建控制频道 ${bootstrapChannel.name}`);
+  existingControl =
+    mountedProject.controlChannelId &&
+    ((await guild.channels.fetch(mountedProject.controlChannelId).catch(() => null)) as
+      | TextChannel
+      | null);
+
+  if (existingControl?.type === ChannelType.GuildText) {
+    bootstrapChannel = existingControl;
+    step(report, 'create-bootstrap-channel', 'passed', `复用控制频道 ${bootstrapChannel.name}`);
+  } else {
+    bootstrapChannel = await guild.channels.create({
+      name: `e2e-control-${Date.now().toString().slice(-4)}`,
+      type: ChannelType.GuildText,
+      parent: category.id,
+      reason: 'threadcord integration smoke test bootstrap channel',
+    });
+    step(report, 'create-bootstrap-channel', 'passed', `创建控制频道 ${bootstrapChannel.name}`);
+  }
 
   const actorId = config.allowedUsers[0] || 'integration-e2e-user';
   const actorTag = 'threadcord-e2e#0001';
 
-  if (!report.usedExistingBinding) {
+  if (!report.usedExistingBinding || !existingControl) {
     const interaction = makeInteraction(actorId, actorTag, guild, bootstrapChannel, 'setup', {
       project: projectName,
     });
     await handleProject(interaction);
-    step(report, 'project-setup', 'passed', `已将 Category 绑定到挂载项目 ${projectName}`);
+    step(report, 'project-setup', 'passed', `已刷新项目绑定与控制频道 ${projectName}`);
   } else {
     step(report, 'project-setup', 'skipped', '项目已存在 Discord 绑定，跳过重复绑定');
   }
@@ -341,7 +353,7 @@ try {
   step(report, 'integration', 'failed', message);
 } finally {
   try {
-    if (bootstrapChannel) {
+    if (bootstrapChannel && !existingControl) {
       await bootstrapChannel.delete('threadcord integration smoke cleanup').catch(() => {});
     }
     if (tempCategory) {

@@ -46,6 +46,8 @@ const MODE_LABELS: Record<SessionMode, string> = {
   monitor: '🧠 Monitor — steers until complete',
 };
 
+const CONTROL_CHANNEL_NAME = 'control';
+
 function assertUserAllowed(interaction: ChatInputCommandInteraction): boolean {
   if (!isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers)) {
     interaction.reply({ content: 'You are not authorized to use this bot.', ephemeral: true });
@@ -70,6 +72,54 @@ function resolveProjectCategoryId(interaction: ChatInputCommandInteraction): str
 
   // TextChannel → parentId is the category
   return (channel as TextChannel).parentId ?? null;
+}
+
+function findControlChannel(guild: Guild, categoryId: string): TextChannel | null {
+  const existing = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.parentId === categoryId &&
+      channel.name === CONTROL_CHANNEL_NAME,
+  );
+  return (existing as TextChannel | undefined) ?? null;
+}
+
+async function resolveOrCreateControlChannel(
+  interaction: ChatInputCommandInteraction,
+  guild: Guild,
+  categoryId: string,
+  storedControlChannelId?: string,
+): Promise<TextChannel> {
+  const currentChannel = interaction.channel as TextChannel;
+
+  if (storedControlChannelId) {
+    const existing = guild.channels.cache.get(storedControlChannelId);
+    if (existing?.type === ChannelType.GuildText) {
+      return existing as TextChannel;
+    }
+  }
+
+  const currentSession = sessionMgr.getSessionByChannel(currentChannel.id);
+  if (!currentSession) {
+    projectMgr.setControlChannelId(categoryId, currentChannel.id);
+    return currentChannel;
+  }
+
+  const reusable = findControlChannel(guild, categoryId);
+  if (reusable) {
+    projectMgr.setControlChannelId(categoryId, reusable.id);
+    return reusable;
+  }
+
+  const created = await guild.channels.create({
+    name: CONTROL_CHANNEL_NAME,
+    type: ChannelType.GuildText,
+    parent: categoryId,
+    topic: 'Use /agent spawn here to create new agent sessions',
+    reason: `Project control channel created for ${interaction.user.tag}`,
+  });
+  projectMgr.setControlChannelId(categoryId, created.id);
+  return created;
 }
 
 // ── /project ──────────────────────────────────────────────────────────────────
@@ -161,6 +211,9 @@ async function handleProjectSetup(interaction: ChatInputCommandInteraction): Pro
     historyInfo = `\n• History forum: <#${project.historyChannelId}>`;
   }
 
+  projectMgr.setControlChannelId(categoryId, interaction.channelId);
+  const controlInfo = `\n• Control channel: <#${interaction.channelId}>`;
+
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
     .setTitle(`✅ Project Ready: ${project.name}`)
@@ -169,7 +222,7 @@ async function handleProjectSetup(interaction: ChatInputCommandInteraction): Pro
       { name: 'Directory', value: `\`${project.directory}\``, inline: true },
     )
     .setDescription(
-      `Use \`/agent spawn\` in any channel under **${categoryName}** to create an agent session.${historyInfo}`,
+      `Use \`/agent spawn\` in <#${interaction.channelId}> to create new agent sessions.${historyInfo}${controlInfo}`,
     );
 
   await interaction.editReply({ embeds: [embed] });
@@ -210,6 +263,10 @@ async function handleProjectInfo(interaction: ChatInputCommandInteraction): Prom
 
   if (project.historyChannelId) {
     embed.addFields({ name: 'History', value: `<#${project.historyChannelId}>`, inline: true });
+  }
+
+  if (project.controlChannelId) {
+    embed.addFields({ name: 'Control', value: `<#${project.controlChannelId}>`, inline: true });
   }
 
   if (project.personality) {
@@ -466,6 +523,19 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
   await interaction.deferReply();
 
   const guild = interaction.guild!;
+  const controlChannel = await resolveOrCreateControlChannel(
+    interaction,
+    guild,
+    categoryId,
+    project.controlChannelId,
+  );
+
+  if (interaction.channelId !== controlChannel.id) {
+    await interaction.editReply(
+      `New agent sessions can only be spawned from the project control channel: <#${controlChannel.id}>. Please run \`/agent spawn\` there.`,
+    );
+    return;
+  }
 
   // Create a new TextChannel under the same category
   const channelName = `${provider}-${label}`

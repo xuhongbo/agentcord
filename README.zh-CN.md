@@ -87,13 +87,13 @@ threadcord
 
 ### 4. 在 Discord 中绑定项目
 
-在目标 Category 下任意文本频道执行：
+在目标 Category 下你希望作为“新会话控制频道”的那个文本频道执行：
 
 ```text
 /project setup project:my-project
 ```
 
-绑定成功后会自动创建或复用 `#history` Forum。
+绑定成功后会自动创建或复用 `#history` Forum，并把当前频道记录为 `/agent spawn` 的专用控制频道。
 
 ## 主要命令
 
@@ -119,9 +119,9 @@ threadcord daemon status
 
 ### Discord Slash Commands
 
-- `/project setup`：把当前 Category 绑定到已挂载项目
+- `/project setup`：把当前 Category 绑定到已挂载项目，并把当前频道设为控制频道
 - `/project info`：查看项目绑定信息
-- `/agent spawn`：创建主代理会话频道
+- `/agent spawn`：在项目控制频道中创建主代理会话频道
 - `/agent archive`：把当前会话归档到 `#history`
 - `/agent mode` / `/agent goal` / `/agent persona` / `/agent model`
 - `/subagent run`：在当前主会话下创建子代理线程

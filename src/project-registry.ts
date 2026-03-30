@@ -10,6 +10,7 @@ export interface RegisteredProject {
   discordCategoryId?: string;
   discordCategoryName?: string;
   historyChannelId?: string;
+  controlChannelId?: string;
   personality?: string;
   skills: Record<string, string>;
   mcpServers: McpServer[];
@@ -122,6 +123,7 @@ export async function unbindProjectCategory(name: string): Promise<void> {
   delete project.discordCategoryId;
   delete project.discordCategoryName;
   delete project.historyChannelId;
+  delete project.controlChannelId;
   project.updatedAt = Date.now();
   await saveRegistry();
 }
@@ -133,6 +135,17 @@ export async function setProjectHistoryChannel(
   const project = getProjectByName(name);
   if (!project) throw new Error(`Project not found: ${name}`);
   project.historyChannelId = historyChannelId;
+  project.updatedAt = Date.now();
+  await saveRegistry();
+}
+
+export async function setProjectControlChannel(
+  name: string,
+  controlChannelId: string,
+): Promise<void> {
+  const project = getProjectByName(name);
+  if (!project) throw new Error(`Project not found: ${name}`);
+  project.controlChannelId = controlChannelId;
   project.updatedAt = Date.now();
   await saveRegistry();
 }

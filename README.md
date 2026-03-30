@@ -87,13 +87,13 @@ threadcord
 
 ### 4. Bind the Discord category to the mounted project
 
-Run this in any text channel under the target category:
+Run this in the text channel you want to use as the dedicated control channel for new sessions:
 
 ```text
 /project setup project:my-project
 ```
 
-If successful, `threadcord` creates or reuses the `#history` forum automatically.
+If successful, `threadcord` creates or reuses the `#history` forum automatically and records the current channel as the control channel for `/agent spawn`.
 
 ## Commands
 
@@ -119,9 +119,9 @@ threadcord daemon status
 
 ### Discord Slash Commands
 
-- `/project setup` — bind the current category to a mounted project
+- `/project setup` — bind the current category to a mounted project and mark the current channel as the control channel
 - `/project info` — inspect project binding details
-- `/agent spawn` — create a main agent session channel
+- `/agent spawn` — create a main agent session channel from the project control channel
 - `/agent archive` — archive the current session into `#history`
 - `/agent mode` / `/agent goal` / `/agent persona` / `/agent model`
 - `/subagent run` — create a subagent thread under the current session
