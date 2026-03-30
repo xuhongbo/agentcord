@@ -87,21 +87,25 @@ full_deployment() {
         return 1
     }
 
-    # 1. 构建项目
+    # 1. 更新 SDK 依赖（跟上本地 CLI 版本）
+    log "📦 Updating SDK dependencies..."
+    pnpm update @anthropic-ai/claude-agent-sdk @openai/codex-sdk 2>&1 | tee -a "$LOG_FILE" || true
+
+    # 2. 构建项目
     log "📦 Building project..."
     if ! pnpm build 2>&1 | tee -a "$LOG_FILE"; then
         log "❌ Build failed"
         return 1
     fi
 
-    # 2. 创建安装包
+    # 3. 创建安装包
     log "📦 Creating package..."
     if ! pnpm pack 2>&1 | tee -a "$LOG_FILE"; then
         log "❌ Pack failed"
         return 1
     fi
 
-    # 3. 全局安装
+    # 4. 全局安装
     log "📦 Installing globally..."
     local tgz_file=$(ls threadcord-*.tgz 2>/dev/null | head -1)
     if [ -z "$tgz_file" ]; then
@@ -115,16 +119,16 @@ full_deployment() {
         return 1
     fi
 
-    # 4. 清理安装包
+    # 5. 清理安装包
     rm -f "$tgz_file"
 
-    # 5. 重启 daemon
+    # 6. 重启 daemon
     log "🔄 Restarting daemon..."
     threadcord daemon uninstall 2>&1 | tee -a "$LOG_FILE"
     rm -f "$HOME/.threadcord/bot.lock"
     threadcord daemon install 2>&1 | tee -a "$LOG_FILE"
 
-    # 6. 等待并验证
+    # 7. 等待并验证
     sleep 5
 
     if check_daemon && check_bot_alive; then

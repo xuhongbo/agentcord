@@ -45,22 +45,25 @@ codex app /Users/ld/Documents/github/agentcord
 1. 进入项目目录：
    cd ~/Documents/github/agentcord
 
-2. 构建项目：
+2. 更新 SDK 依赖（确保和本地 CLI 版本兼容）：
+   pnpm update @anthropic-ai/claude-agent-sdk @openai/codex-sdk
+
+3. 构建项目：
    pnpm build
 
-3. 创建安装包：
+4. 创建安装包：
    pnpm pack
 
-4. 全局安装（使用完整路径）：
+5. 全局安装（使用完整路径）：
    pnpm install -g ~/Documents/github/agentcord/threadcord-*.tgz
 
-5. 重启 daemon 服务：
+6. 重启 daemon 服务：
    threadcord daemon uninstall && threadcord daemon install
 
-6. 验证部署：
+7. 验证部署：
    sleep 3 && threadcord daemon status
 
-7. 清理安装包：
+8. 清理安装包：
    rm ~/Documents/github/agentcord/threadcord-*.tgz
 
 ## 第三步：生成报告
@@ -108,6 +111,7 @@ content = """
 1. 运行健康检查脚本
 2. 如果服务正常，生成状态报告
 3. 如果服务异常且自动重启失败，执行完整部署流程：
+   - pnpm update (更新 SDK 依赖)
    - pnpm build
    - pnpm pack
    - pnpm install -g (使用完整路径)
