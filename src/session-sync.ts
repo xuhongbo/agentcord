@@ -136,7 +136,7 @@ async function runSync(client: Client): Promise<void> {
     // Claude SDK unavailable
   }
 
-  const codexSessions = listCodexSessionsForProjects(projects.map((project) => project.path));
+  const codexSessions = await listCodexSessionsForProjects(projects.map((project) => project.path));
   for (const session of codexSessions) {
     if (existingProviderIds.has(session.id)) continue;
     const project = projects.find((item) => item.path === session.projectPath);

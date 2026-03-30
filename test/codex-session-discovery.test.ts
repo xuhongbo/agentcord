@@ -9,7 +9,7 @@ import {
 } from '../src/codex-session-discovery.ts';
 
 describe('codex-session-discovery', () => {
-  it('reads index and locates session file', () => {
+  it('reads index and locates session file', async () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'codex-home-'));
     mkdirSync(join(codexHome, 'sessions', '2026', '03'), { recursive: true });
     writeFileSync(
@@ -24,15 +24,15 @@ describe('codex-session-discovery', () => {
       `${JSON.stringify({ type: 'session_meta', payload: { cwd: '/repo/a' }, id: 'abc' })}\n${JSON.stringify({ type: 'user', text: 'hi' })}`,
     );
 
-    const index = readSessionIndex(codexHome);
+    const index = await readSessionIndex(codexHome);
     expect(index).toHaveLength(1);
     expect(index[0].threadName).toBe('feature x');
 
-    const file = findSessionFileById('abc', codexHome);
+    const file = await findSessionFileById('abc', codexHome);
     expect(file).toContain('one.jsonl');
   });
 
-  it('does not false-match another file that merely references the session id in later content', () => {
+  it('does not false-match another file that merely references the session id in later content', async () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'codex-home-'));
     mkdirSync(join(codexHome, 'sessions', '2026', '03'), { recursive: true });
     writeFileSync(
@@ -57,11 +57,11 @@ describe('codex-session-discovery', () => {
       }),
     );
 
-    const file = findSessionFileById('target-session', codexHome);
+    const file = await findSessionFileById('target-session', codexHome);
     expect(file).toContain('right.jsonl');
   });
 
-  it('filters by mounted project path', () => {
+  it('filters by mounted project path', async () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'codex-home-'));
     mkdirSync(join(codexHome, 'sessions'), { recursive: true });
 
@@ -78,7 +78,7 @@ describe('codex-session-discovery', () => {
       }),
     );
 
-    const sessions = listCodexSessionsForProjects(
+    const sessions = await listCodexSessionsForProjects(
       ['/work/project-a', '/work/project-b'],
       codexHome,
     );

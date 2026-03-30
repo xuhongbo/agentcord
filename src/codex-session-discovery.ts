@@ -1,14 +1,19 @@
-import { existsSync, readFileSync, globSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { glob } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 let rgAvailable: boolean | null = null;
 
-function isRipgrepAvailable(): boolean {
+async function isRipgrepAvailable(): Promise<boolean> {
   if (rgAvailable !== null) return rgAvailable;
   try {
-    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    await execFileAsync('rg', ['--version']);
     rgAvailable = true;
   } catch {
     rgAvailable = false;
@@ -35,11 +40,18 @@ interface SessionMetaRecord {
   cwd: string | null;
 }
 
-export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIndexedSession[] {
+export async function readSessionIndex(codexHome = join(homedir(), '.codex')): Promise<CodexIndexedSession[]> {
   const indexPath = join(codexHome, 'session_index.jsonl');
   if (!existsSync(indexPath)) return [];
-  const lines = readFileSync(indexPath, 'utf-8').split('\n').filter(Boolean);
 
+  let content: string;
+  try {
+    content = await readFile(indexPath, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  const lines = content.split('\n').filter(Boolean);
   const out: CodexIndexedSession[] = [];
   for (const line of lines) {
     try {
@@ -58,9 +70,10 @@ export function readSessionIndex(codexHome = join(homedir(), '.codex')): CodexIn
   return out;
 }
 
-function readSessionMetaRecord(file: string): SessionMetaRecord | null {
+async function readSessionMetaRecord(file: string): Promise<SessionMetaRecord | null> {
   try {
-    const firstLine = readFileSync(file, 'utf-8').split('\n').find(Boolean);
+    const content = await readFile(file, 'utf-8');
+    const firstLine = content.split('\n').find(Boolean);
     if (!firstLine) return null;
     const first = JSON.parse(firstLine);
     if (first.type !== 'session_meta') return null;
@@ -77,39 +90,37 @@ function readSessionMetaRecord(file: string): SessionMetaRecord | null {
   }
 }
 
-function fileMatchesSessionId(file: string, id: string): boolean {
-  const meta = readSessionMetaRecord(file);
+async function fileMatchesSessionId(file: string, id: string): Promise<boolean> {
+  const meta = await readSessionMetaRecord(file);
   return meta?.sessionId === id;
 }
 
-export function findSessionFileById(
-  id: string,
-  codexHome = join(homedir(), '.codex'),
-): string | null {
+export async function findSessionFileById(id: string, codexHome = join(homedir(), '.codex')): Promise<string | null> {
   const sessionsDir = join(codexHome, 'sessions');
   if (!existsSync(sessionsDir)) return null;
 
   // Only try ripgrep if it's available
-  if (isRipgrepAvailable()) {
+  if (await isRipgrepAvailable()) {
     try {
-      const result = execFileSync('rg', ['-l', '--fixed-strings', `"${id}"`, sessionsDir], {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      })
-        .trim()
-        .split('\n')
-        .filter(Boolean);
-      for (const file of result) {
-        if (fileMatchesSessionId(file, id)) return file;
+      const { stdout } = await execFileAsync(
+        'rg',
+        ['-l', '--fixed-strings', `"${id}"`, sessionsDir],
+      );
+      const files = stdout.trim().split('\n').filter(Boolean);
+      for (const file of files) {
+        if (await fileMatchesSessionId(file, id)) return file;
       }
     } catch {
       // fall back to slower in-process scan
     }
   }
 
-  const files = globSync(join(sessionsDir, '**/*.jsonl'));
+  const files: string[] = [];
+  for await (const entry of glob(join(sessionsDir, '**/*.jsonl'))) {
+    files.push(entry);
+  }
   for (const file of files) {
-    if (fileMatchesSessionId(file, id)) return file;
+    if (await fileMatchesSessionId(file, id)) return file;
   }
   return null;
 }
@@ -122,19 +133,19 @@ export function isSubpathOfProject(cwd: string, projectPath: string): boolean {
   );
 }
 
-export function listCodexSessionsForProjects(
+export async function listCodexSessionsForProjects(
   projectPaths: string[],
   codexHome = join(homedir(), '.codex'),
-): CodexDiscoveredSession[] {
-  const indexed = readSessionIndex(codexHome);
+): Promise<CodexDiscoveredSession[]> {
+  const indexed = await readSessionIndex(codexHome);
   const normalizedProjects = projectPaths.map((p) => resolve(p));
   const out: CodexDiscoveredSession[] = [];
 
   for (const row of indexed) {
     try {
-      const file = findSessionFileById(row.id, codexHome);
+      const file = await findSessionFileById(row.id, codexHome);
       if (!file) continue;
-      const meta = readSessionMetaRecord(file);
+      const meta = await readSessionMetaRecord(file);
       if (!meta || meta.sessionId !== row.id || !meta.cwd) continue;
       const cwd = meta.cwd;
 
