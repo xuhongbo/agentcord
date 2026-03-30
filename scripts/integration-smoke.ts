@@ -10,8 +10,7 @@ import {
   type AnyThreadChannel,
 } from 'discord.js';
 import { config } from '../src/config.ts';
-import { handleProject, handleAgent, handleSubagent } from '../src/command-handlers.ts';
-import { executeShellCommand } from '../src/shell-handler.ts';
+import { handleProject, handleAgent, handleSubagent, handleShell } from '../src/command-handlers.ts';
 import { executeSessionPrompt } from '../src/session-executor.ts';
 import {
   loadRegistry,
@@ -274,12 +273,18 @@ try {
   report.subagentThreadId = subagent.channelId;
   step(report, 'subagent-run', 'passed', `创建子代理线程 ${subLabel}`);
 
-  await withTimeout(
-    executeShellCommand('pwd', mountedProject.path, mainChannel),
-    15000,
-    'shell-smoke',
-  );
-  step(report, 'shell-smoke', 'passed', '主会话频道成功执行 pwd');
+  if (!config.shellEnabled) {
+    report.missingInputs.push(
+      '若要自动验证 /shell run 真实命令入口，请先启用 SHELL_ENABLED=true',
+    );
+    step(report, 'shell-smoke', 'skipped', '未启用 SHELL_ENABLED，跳过 /shell run 冒烟');
+  } else {
+    const shellInteraction = makeInteraction(actorId, actorTag, guild, mainChannel, 'run', {
+      command: 'pwd',
+    });
+    await withTimeout(handleShell(shellInteraction as never), 15000, 'shell-smoke');
+    step(report, 'shell-smoke', 'passed', '主会话频道成功通过 /shell run 执行 pwd');
+  }
 
   const claudeCapable = Boolean(config.anthropicApiKey);
   const codexCapable = Boolean(config.codexApiKey);

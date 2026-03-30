@@ -6,6 +6,8 @@ import {
   ComponentType,
   ChannelType,
   type TextChannel,
+  type Interaction,
+  type Message,
 } from 'discord.js';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +37,55 @@ let client: Client;
 let logChannel: TextChannel | null = null;
 const logBuffer: string[] = [];
 let logTimer: ReturnType<typeof setTimeout> | null = null;
+
+export async function routeInteractionCreate(interaction: Interaction): Promise<void> {
+  try {
+    if (
+      interaction.type === InteractionType.ApplicationCommand &&
+      interaction.isChatInputCommand()
+    ) {
+      switch (interaction.commandName) {
+        case 'project':
+          return await handleProject(interaction as never);
+        case 'agent':
+          return await handleAgent(interaction as never);
+        case 'subagent':
+          return await handleSubagent(interaction as never);
+        case 'shell':
+          return await handleShell(interaction as never);
+        case 'spawn':
+          return await handleSpawnShortcut(interaction as never);
+        case 'stop':
+          return await handleStopShortcut(interaction as never);
+        case 'end':
+          return await handleEndShortcut(interaction as never);
+        case 'run':
+          return await handleRunShortcut(interaction as never);
+      }
+    }
+
+    if (interaction.isButton()) {
+      return await handleButton(interaction as never);
+    }
+
+    if (interaction.isStringSelectMenu()) {
+      return await handleSelectMenu(interaction as never);
+    }
+  } catch (err) {
+    console.error('Interaction error:', err);
+    try {
+      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: 'An error occurred.', ephemeral: true });
+      }
+    } catch {
+      /* can't recover */
+    }
+  }
+}
+
+export async function routeMessageCreate(message: Message): Promise<void> {
+  await handleMessage(message);
+}
 
 // ─── Process lock ─────────────────────────────────────────────────────────────
 
@@ -182,54 +233,10 @@ export async function startBot(): Promise<void> {
   setLogger(botLog);
 
   // Slash command / button interactions
-  client.on('interactionCreate', async (interaction) => {
-    try {
-      if (
-        interaction.type === InteractionType.ApplicationCommand &&
-        interaction.isChatInputCommand()
-      ) {
-        switch (interaction.commandName) {
-          case 'project':
-            return await handleProject(interaction);
-          case 'agent':
-            return await handleAgent(interaction);
-          case 'subagent':
-            return await handleSubagent(interaction);
-          case 'shell':
-            return await handleShell(interaction);
-          // 快捷命令
-          case 'spawn':
-            return await handleSpawnShortcut(interaction);
-          case 'stop':
-            return await handleStopShortcut(interaction);
-          case 'end':
-            return await handleEndShortcut(interaction);
-          case 'run':
-            return await handleRunShortcut(interaction);
-        }
-      }
-
-      if (interaction.isButton()) {
-        return await handleButton(interaction);
-      }
-
-      if (interaction.isStringSelectMenu()) {
-        return await handleSelectMenu(interaction);
-      }
-    } catch (err) {
-      console.error('Interaction error:', err);
-      try {
-        if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: 'An error occurred.', ephemeral: true });
-        }
-      } catch {
-        /* can't recover */
-      }
-    }
-  });
+  client.on('interactionCreate', routeInteractionCreate);
 
   // Messages in session channels (TextChannel) and subagent threads
-  client.on('messageCreate', handleMessage);
+  client.on('messageCreate', routeMessageCreate);
 
   // Session channel deleted → end the persistent session
   client.on('channelDelete', (channel) => {

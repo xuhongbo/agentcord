@@ -83,6 +83,10 @@ async function buildImageBlock(data: Buffer, ext: string): Promise<ImageBlock> {
   };
 }
 
+export function resetMessageHandlerState(): void {
+  lastMessageTime.clear();
+}
+
 export async function handleMessage(message: Message): Promise<void> {
   // Ignore bots
   if (message.author.bot) return;

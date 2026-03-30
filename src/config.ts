@@ -52,7 +52,7 @@ export const config = {
 
   dataDir: join(homedir(), '.threadcord'),
 
-  defaultProvider: optional('DEFAULT_PROVIDER', 'claude') as ProviderName,
+  defaultProvider: optional('DEFAULT_PROVIDER', 'codex') as ProviderName,
   defaultMode: optional('DEFAULT_MODE', 'auto') as SessionMode,
   claudePermissionMode: optional('CLAUDE_PERMISSION_MODE', 'normal') as 'bypass' | 'normal',
 

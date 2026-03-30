@@ -92,8 +92,8 @@ const commands = [
             .setDescription('选择代理提供方')
             .setRequired(false)
             .addChoices(
-              { name: 'Claude（默认）', value: 'claude' },
-              { name: 'Codex', value: 'codex' },
+              { name: 'Codex（默认）', value: 'codex' },
+              { name: 'Claude', value: 'claude' },
             ),
         )
         .addStringOption((opt) =>
@@ -199,8 +199,8 @@ const commands = [
             .setDescription('选择代理提供方')
             .setRequired(false)
             .addChoices(
-              { name: 'Claude（默认）', value: 'claude' },
-              { name: 'Codex', value: 'codex' },
+              { name: 'Codex（默认）', value: 'codex' },
+              { name: 'Claude', value: 'claude' },
             ),
         ),
     )
@@ -238,7 +238,7 @@ const commands = [
         .setName('provider')
         .setDescription('选择代理提供方')
         .setRequired(false)
-        .addChoices({ name: 'Claude（默认）', value: 'claude' }, { name: 'Codex', value: 'codex' }),
+        .addChoices({ name: 'Codex（默认）', value: 'codex' }, { name: 'Claude', value: 'claude' }),
     )
     .addStringOption((opt) =>
       opt
@@ -279,9 +279,13 @@ const commands = [
         .setName('provider')
         .setDescription('选择代理提供方')
         .setRequired(false)
-        .addChoices({ name: 'Claude（默认）', value: 'claude' }, { name: 'Codex', value: 'codex' }),
+        .addChoices({ name: 'Codex（默认）', value: 'codex' }, { name: 'Claude', value: 'claude' }),
     ),
 ];
+
+export function getCommandDefinitions() {
+  return commands.map((command) => command.toJSON());
+}
 
 const HASH_FILE = join(config.dataDir, 'commands-hash.txt');
 
@@ -310,7 +314,7 @@ function writeStoredHash(hash: string): void {
 
 export async function registerCommands(): Promise<void> {
   const rest = new REST({ version: '10' }).setToken(config.token);
-  const body = commands.map((c) => c.toJSON());
+  const body = getCommandDefinitions();
 
   const currentHash = computeCommandsHash(body);
   const storedHash = readStoredHash();
