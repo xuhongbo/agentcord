@@ -1,39 +1,49 @@
-import { describe, expect, it } from 'vitest';
-import { handleOutputStream } from '../src/output-handler.ts';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderEvent } from '../src/providers/types.ts';
-type ChannelPayload = string | { content?: string };
 
-class FakeMessage {
-  content = '';
+const mocks = vi.hoisted(() => ({
+  updateSessionStatus: vi.fn(),
+  queueSessionDigest: vi.fn(),
+  flushSessionDigest: vi.fn(),
+  finalizeSessionPresentation: vi.fn(),
+  incrementSessionCounters: vi.fn(),
+  getSession: vi.fn(),
+}));
 
-  async edit(payload: string | { content?: string }): Promise<this> {
-    if (typeof payload === 'string') {
-      this.content = payload;
-    } else if (typeof payload.content === 'string') {
-      this.content = payload.content;
-    }
-    return this;
-  }
+vi.mock('../src/session-output-coordinator.ts', () => ({
+  updateSessionStatus: mocks.updateSessionStatus,
+  queueSessionDigest: mocks.queueSessionDigest,
+  flushSessionDigest: mocks.flushSessionDigest,
+  finalizeSessionPresentation: mocks.finalizeSessionPresentation,
+  incrementSessionCounters: mocks.incrementSessionCounters,
+}));
+vi.mock('../src/thread-manager.ts', () => ({
+  getSession: mocks.getSession,
+  getSessionByChannel: vi.fn(),
+  updateWorkflowState: vi.fn(),
+  setMode: vi.fn(),
+}));
 
-  async delete(): Promise<void> {}
-}
+const { handleOutputStream } = await import('../src/output-handler.ts');
 
 function createFakeChannel() {
-  const sent: ChannelPayload[] = [];
-
+  const sent: unknown[] = [];
   return {
     sent,
-    async send(payload: ChannelPayload): Promise<FakeMessage> {
+    async send(payload: unknown) {
       sent.push(payload);
-      const message = new FakeMessage();
-      if (typeof payload === 'string') {
-        message.content = payload;
-      } else if (typeof payload?.content === 'string') {
-        message.content = payload.content;
-      }
-      return message;
+      return {
+        content:
+          typeof payload === 'object' && payload && 'content' in (payload as Record<string, unknown>)
+            ? String((payload as Record<string, unknown>).content ?? '')
+            : '',
+        components: [],
+        pin: vi.fn(async () => undefined),
+        edit: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      };
     },
-    async sendTyping(): Promise<void> {},
+    async sendTyping() {},
   };
 }
 
@@ -43,45 +53,63 @@ async function* streamEvents(events: ProviderEvent[]): AsyncGenerator<ProviderEv
   }
 }
 
-function collectSentText(channel: ReturnType<typeof createFakeChannel>): string {
-  return channel.sent
-    .map((payload) => (typeof payload === 'string' ? payload : (payload?.content ?? '')))
-    .filter(Boolean)
-    .join('');
-}
-
 describe('handleOutputStream', () => {
-  it('preserves the leading chunks of the first long streamed response', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getSession.mockReturnValue({
+      id: 'session-1',
+      agentLabel: 'demo',
+      provider: 'codex',
+      mode: 'auto',
+      workflowState: { status: 'idle', iteration: 0, updatedAt: Date.now() },
+    });
+  });
+
+  it('高频命令与文件事件进入聚合器而不是逐条发消息', async () => {
     const channel = createFakeChannel();
-    const longText = 'A'.repeat(2100) + 'B'.repeat(2100) + 'C'.repeat(200);
 
     await handleOutputStream(
       streamEvents([
-        { type: 'text_delta', text: longText },
-        { type: 'tool_start', toolName: 'Read', toolInput: '{}' },
+        { type: 'text_delta', text: 'Completed the requested change.' },
+        {
+          type: 'command_execution',
+          command: 'pnpm test',
+          output: 'ok',
+          exitCode: 0,
+          status: 'completed',
+        },
+        {
+          type: 'file_change',
+          changes: [{ filePath: 'src/file.ts', changeKind: 'update' }],
+        },
+        { type: 'result', success: true, costUsd: 0, durationMs: 25, numTurns: 1, errors: [] },
       ]),
       channel as Parameters<typeof handleOutputStream>[1],
       'session-1',
     );
 
-    const sentText = collectSentText(channel);
-    expect(sentText).toContain('A'.repeat(200));
-    expect(sentText).toContain('B'.repeat(200));
-    expect(sentText).toContain('C'.repeat(200));
+    expect(mocks.queueSessionDigest).toHaveBeenCalled();
+    expect(mocks.finalizeSessionPresentation).toHaveBeenCalled();
+    expect(channel.sent).toEqual([]);
   });
 
-  it('returns the accumulated worker text after the stream finishes', async () => {
+  it('ask_user 仍会直接发送交互问题', async () => {
     const channel = createFakeChannel();
 
-    const result = await handleOutputStream(
+    await handleOutputStream(
       streamEvents([
-        { type: 'text_delta', text: 'Completed the requested change.' },
-        { type: 'result', success: true, costUsd: 0, durationMs: 25, numTurns: 1, errors: [] },
+        {
+          type: 'ask_user',
+          questionsJson: JSON.stringify({
+            questions: [{ header: 'Question', question: 'Continue?', options: [{ label: 'Yes' }] }],
+          }),
+        },
       ]),
       channel as Parameters<typeof handleOutputStream>[1],
       'session-2',
     );
 
-    expect(result.text).toContain('Completed the requested change.');
+    expect(channel.sent.length).toBe(1);
+    expect(mocks.updateSessionStatus).toHaveBeenCalled();
   });
 });

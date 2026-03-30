@@ -1,6 +1,12 @@
 import { execa } from 'execa';
 import type { TextChannel, AnyThreadChannel } from 'discord.js';
 import type { ShellProcess } from './types.ts';
+import {
+  finalizeSessionPresentation,
+  flushSessionDigest,
+  queueSessionDigest,
+  updateSessionStatus,
+} from './session-output-coordinator.ts';
 import { truncate } from './utils.ts';
 
 type SessionChannel = TextChannel | AnyThreadChannel;
@@ -52,8 +58,25 @@ export async function executeShellCommand(
 
   runningProcesses.set(pid, shellProcess);
   execaProcesses.set(pid, child);
-
-  await withDiscordTimeout(channel.send(`Running shell command:\n\`${truncate(command, 200)}\``));
+  await updateSessionStatus(
+    {
+      id: `shell-${pid}`,
+      agentLabel: 'shell',
+      provider: 'codex',
+      mode: 'normal',
+      workflowState: { status: 'worker_running', iteration: 1, updatedAt: Date.now() },
+    },
+    channel,
+    {
+      state: 'running',
+      phase: '执行 shell 命令',
+      summary: `正在执行：${truncate(command, 120)}`,
+    },
+  );
+  queueSessionDigest(`shell-${pid}`, {
+    kind: 'command',
+    text: `执行命令：${truncate(command, 120)}`,
+  });
 
   const result = await child;
   const output = [
@@ -66,8 +89,26 @@ export async function executeShellCommand(
 
   runningProcesses.delete(pid);
   execaProcesses.delete(pid);
-
-  await withDiscordTimeout(channel.send(renderShellOutput(command, output)));
+  queueSessionDigest(`shell-${pid}`, {
+    kind: 'command',
+    text: `命令结束：退出码 ${result.exitCode ?? 'killed'}`,
+  });
+  await flushSessionDigest({ id: `shell-${pid}`, agentLabel: 'shell' }, channel, true);
+  await finalizeSessionPresentation(
+    {
+      id: `shell-${pid}`,
+      agentLabel: 'shell',
+      provider: 'codex',
+      mode: 'normal',
+      workflowState: { status: 'completed', iteration: 1, updatedAt: Date.now() },
+    },
+    channel,
+    {
+      outcome: result.exitCode === 0 ? 'completed' : 'error',
+      summary: renderShellOutput(command, output),
+      terminal: false,
+    },
+  );
 }
 
 export function listProcesses(): ShellProcess[] {

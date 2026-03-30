@@ -3,6 +3,11 @@ import type { TextChannel, AnyThreadChannel } from 'discord.js';
 type SessionChannel = TextChannel | AnyThreadChannel;
 import * as sessions from './thread-manager.ts';
 import { handleOutputStream } from './output-handler.ts';
+import {
+  finalizeSessionPresentation,
+  queueSessionDigest,
+  updateSessionStatus,
+} from './session-output-coordinator.ts';
 import { isAbortError, truncate } from './utils.ts';
 import type {
   ThreadSession as Session,
@@ -787,15 +792,25 @@ async function resolveAskUserIfPossible(
       awaitingHumanReason:
         decision.rationale || 'The worker hit a real non-obvious decision point.',
     });
-    await channel.send(
-      `*Monitor: human input required. ${truncate(decision.rationale || 'The worker hit a real non-obvious decision point.', 400)}*`,
-    );
+    await updateSessionStatus(session, channel, {
+      state: 'awaiting_human',
+      phase: '等待人工决策',
+      summary: truncate(
+        decision.rationale || 'The worker hit a real non-obvious decision point.',
+        200,
+      ),
+      iteration,
+    });
     return { handled: false };
   }
 
-  await channel.send(
-    `*Monitor: auto-resolving worker question to keep progress moving. ${truncate(decision.rationale || 'The better path was already implied by the original request.', 400)}*`,
-  );
+  queueSessionDigest(session.id, {
+    kind: 'monitor',
+    text: `自动处理了一个提问分支：${truncate(
+      decision.rationale || 'The better path was already implied by the original request.',
+      120,
+    )}`,
+  });
   const autoDecision: MonitorDecision = {
     status: 'continue',
     confidence: 'medium',
@@ -864,9 +879,16 @@ async function runMonitorLoop(
         lastMonitorDecision: preclassifiedDecision,
         nextProofContract,
       });
-      await channel.send(
-        `*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(preclassifiedDecision.rationale, 300)}*`,
-      );
+      await updateSessionStatus(currentSession, channel, {
+        state: 'running',
+        phase: '继续执行',
+        summary: truncate(preclassifiedDecision.rationale, 160),
+        iteration,
+      });
+      queueSessionDigest(currentSession.id, {
+        kind: 'monitor',
+        text: `第 ${iteration} 轮监控判断任务仍未完成：${truncate(preclassifiedDecision.rationale, 120)}`,
+      });
       workerResult = await runWorkerPass(
         currentSession,
         channel,
@@ -910,9 +932,10 @@ async function runMonitorLoop(
         decision.completionSummary ||
         decision.rationale ||
         'The monitor judged the request complete.';
-      await channel.send(
-        `*Monitor: completion bar met (${decision.confidence}). ${truncate(summary, 400)}*`,
-      );
+      await finalizeSessionPresentation(currentSession, channel, {
+        outcome: 'completed',
+        summary: truncate(summary, 400),
+      });
       return;
     }
 
@@ -926,13 +949,23 @@ async function runMonitorLoop(
         nextProofContract: undefined,
       });
       const blocker = decision.rationale || 'The monitor reported a blocker.';
-      await channel.send(`*Monitor: blocked (${decision.confidence}). ${truncate(blocker, 400)}*`);
+      await finalizeSessionPresentation(currentSession, channel, {
+        outcome: 'blocked',
+        summary: truncate(blocker, 400),
+      });
       return;
     }
 
-    await channel.send(
-      `*Monitor: pass ${iteration}/${MAX_MONITOR_ITERATIONS} says the original request is still incomplete. Steering the agent: ${truncate(decision.rationale || 'continue working', 300)}*`,
-    );
+    await updateSessionStatus(currentSession, channel, {
+      state: 'running',
+      phase: '继续执行',
+      summary: truncate(decision.rationale || 'continue working', 160),
+      iteration,
+    });
+    queueSessionDigest(currentSession.id, {
+      kind: 'monitor',
+      text: `第 ${iteration} 轮监控继续：${truncate(decision.rationale || 'continue working', 120)}`,
+    });
     workerResult = await runWorkerPass(
       currentSession,
       channel,
@@ -966,9 +999,11 @@ async function runMonitorLoop(
     lastMonitorDecision: limitDecision,
     nextProofContract: buildNextProofContract(goal, limitDecision),
   });
-  await channel.send(
-    '*Monitor: reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.*',
-  );
+  await finalizeSessionPresentation(currentSession, channel, {
+    outcome: 'blocked',
+    summary:
+      'Reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.',
+  });
 }
 
 export async function executeSessionPrompt(
@@ -1033,9 +1068,11 @@ export async function executeSessionContinue(
         blockingReason: 'Monitor mode is enabled but no monitor goal is saved for this session.',
       },
     });
-    await channel.send(
-      '*Monitor: blocked. No monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.*',
-    );
+    await finalizeSessionPresentation(liveSession, channel, {
+      outcome: 'blocked',
+      summary:
+        'Monitor mode is enabled but no monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.',
+    });
     return;
   }
   const nextProofContract = liveSession.workflowState.nextProofContract;

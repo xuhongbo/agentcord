@@ -29,6 +29,13 @@ import {
 } from './codex-renderer.ts';
 import { getSession } from './thread-manager.ts';
 import * as sessions from './thread-manager.ts';
+import {
+  finalizeSessionPresentation,
+  flushSessionDigest,
+  incrementSessionCounters,
+  queueSessionDigest,
+  updateSessionStatus,
+} from './session-output-coordinator.ts';
 
 // In-memory store for expandable content (with TTL cleanup)
 const expandableStore = new Map<string, ExpandableContent>();
@@ -356,9 +363,8 @@ function detectRepetition(text: string): { isRepetitive: boolean; cleanedText: s
  * at a time, preventing duplicate messages from race conditions.
  */
 class MessageStreamer {
-  private channel: SessionChannel;
-  private sessionId: string;
-  private currentMessage: Message | null = null;
+  private _channel: SessionChannel;
+  private _sessionId: string;
   private currentText = '';
   private transcriptText = '';
   private dirty = false;
@@ -367,8 +373,8 @@ class MessageStreamer {
   private readonly INTERVAL = 400;
 
   constructor(channel: SessionChannel, sessionId: string) {
-    this.channel = channel;
-    this.sessionId = sessionId;
+    this._channel = channel;
+    this._sessionId = sessionId;
   }
 
   append(text: string, options: { persist?: boolean } = {}): void {
@@ -392,44 +398,7 @@ class MessageStreamer {
     if (this.flushing || !this.dirty) return;
     this.flushing = true;
     try {
-      const text = this.currentText;
       this.dirty = false;
-      const chunks = splitMessage(text);
-      const lastChunk = chunks[chunks.length - 1];
-
-      if (chunks.length > 1) {
-        if (this.currentMessage) {
-          try {
-            await this.currentMessage.edit({ content: chunks[0], components: [] });
-          } catch {
-            /* deleted */
-          }
-          this.currentMessage = null;
-          for (let i = 1; i < chunks.length - 1; i++) {
-            await this.channel.send(chunks[i]);
-          }
-        } else {
-          for (let i = 0; i < chunks.length - 1; i++) {
-            await this.channel.send(chunks[i]);
-          }
-        }
-      }
-
-      if (this.currentMessage) {
-        try {
-          await this.currentMessage.edit({
-            content: lastChunk,
-            components: [makeStopButton(this.sessionId)],
-          });
-        } catch {
-          /* deleted */
-        }
-      } else {
-        this.currentMessage = await this.channel.send({
-          content: lastChunk,
-          components: [makeStopButton(this.sessionId)],
-        });
-      }
     } finally {
       this.flushing = false;
       if (this.dirty) this.scheduleFlush();
@@ -447,50 +416,9 @@ class MessageStreamer {
 
     if (this.dirty) {
       this.dirty = false;
-      // Apply repetition detection before finalizing
       const { cleanedText } = detectRepetition(this.currentText);
-      const text = cleanedText;
-      const chunks = splitMessage(text);
-      const lastChunk = chunks[chunks.length - 1];
-
-      if (chunks.length > 1 && this.currentMessage) {
-        try {
-          await this.currentMessage.edit({ content: chunks[0], components: [] });
-        } catch {
-          /* deleted */
-        }
-        this.currentMessage = null;
-        for (let i = 1; i < chunks.length - 1; i++) {
-          await this.channel.send(chunks[i]);
-        }
-      } else if (chunks.length > 1) {
-        for (let i = 0; i < chunks.length - 1; i++) {
-          await this.channel.send(chunks[i]);
-        }
-      }
-
-      if (this.currentMessage) {
-        try {
-          await this.currentMessage.edit({ content: lastChunk, components: [] });
-        } catch {
-          /* deleted */
-        }
-      } else if (lastChunk) {
-        this.currentMessage = await this.channel.send({ content: lastChunk });
-      }
-    } else if (this.currentMessage) {
-      try {
-        await this.currentMessage.edit({
-          content: this.currentMessage.content || '',
-          components: [],
-        });
-      } catch {
-        /* deleted */
-      }
+      this.currentText = cleanedText;
     }
-
-    this.currentMessage = null;
-    this.currentText = '';
   }
 
   async discard(): Promise<void> {
@@ -500,14 +428,6 @@ class MessageStreamer {
     }
     while (this.flushing) {
       await new Promise((r) => setTimeout(r, 50));
-    }
-    if (this.currentMessage) {
-      try {
-        await this.currentMessage.delete();
-      } catch {
-        /* already deleted */
-      }
-      this.currentMessage = null;
     }
     this.currentText = '';
     this.dirty = false;
@@ -554,11 +474,17 @@ export async function handleOutputStream(
   let fileChangeCount = 0;
   const recentCommands: string[] = [];
   const changedFiles: string[] = [];
+  let lastDigestFlushAt = Date.now();
+  const session = sessions.getSession(sessionId);
 
-  channel.sendTyping().catch(() => {});
-  const typingInterval = setInterval(() => {
-    channel.sendTyping().catch(() => {});
-  }, 8000);
+  if (session) {
+    await updateSessionStatus(session, channel, {
+      state: 'running',
+      phase: mode === 'monitor' ? '执行中（监控）' : '执行中',
+      summary: '本地 agent 正在工作',
+      iteration: session.workflowState.iteration || 1,
+    });
+  }
 
   try {
     for await (const event of stream) {
@@ -573,6 +499,14 @@ export async function handleOutputStream(
           askedUser = true;
           askUserQuestionsJson = event.questionsJson;
           await streamer.discard();
+          if (session) {
+            await updateSessionStatus(session, channel, {
+              state: 'awaiting_human',
+              phase: '等待人工输入',
+              summary: '需要你回答一个问题',
+            });
+            await flushSessionDigest(session, channel, true);
+          }
           const rendered = renderAskUserQuestion(event.questionsJson, sessionId);
           if (rendered) {
             rendered.components.push(makeStopButton(sessionId));
@@ -583,124 +517,61 @@ export async function handleOutputStream(
 
         case 'task': {
           await streamer.finalize();
-          const isTaskResult = event.action === 'TaskList' || event.action === 'TaskGet';
-          if (!isTaskResult) {
-            const taskEmbed = renderTaskToolEmbed(event.action, event.dataJson);
-            if (taskEmbed) {
-              await channel.send({ embeds: [taskEmbed], components: [makeStopButton(sessionId)] });
-            }
-          }
+          queueSessionDigest(sessionId, { kind: 'tool', text: `任务工具：${event.action}` });
           lastToolName = event.action;
           break;
         }
 
         case 'task_started': {
           await streamer.finalize();
-          const embed = new EmbedBuilder()
-            .setColor(0x9b59b6)
-            .setTitle(`🤖 Subagent started`)
-            .setDescription(truncate(event.description, 300));
-          await channel.send({ embeds: [embed] });
+          incrementSessionCounters(sessionId, { subagentCount: 1 });
+          queueSessionDigest(sessionId, {
+            kind: 'subagent',
+            text: `子代理启动：${truncate(event.description, 80)}`,
+          });
           break;
         }
 
         case 'task_progress': {
-          // Silently track progress — only show if there's a summary
           if (event.summary) {
-            await streamer.finalize();
-            const embed = new EmbedBuilder()
-              .setColor(0x8e44ad)
-              .setTitle(`🔄 Subagent progress`)
-              .setDescription(truncate(event.summary, 500));
-            if (event.lastToolName) embed.setFooter({ text: `Last: ${event.lastToolName}` });
-            await channel.send({ embeds: [embed] });
+            queueSessionDigest(sessionId, {
+              kind: 'subagent',
+              text: `子代理进展：${truncate(event.summary, 100)}`,
+            });
           }
           break;
         }
 
         case 'task_done': {
           await streamer.finalize();
-          const statusEmoji =
-            event.status === 'completed' ? '✅' : event.status === 'failed' ? '❌' : '⏹️';
-          const embed = new EmbedBuilder()
-            .setColor(event.status === 'completed' ? 0x2ecc71 : 0xe74c3c)
-            .setTitle(`${statusEmoji} Subagent ${event.status}`)
-            .setDescription(truncate(event.summary || 'No summary.', 500));
-          await channel.send({ embeds: [embed] });
+          queueSessionDigest(sessionId, {
+            kind: 'subagent',
+            text: `子代理${event.status === 'completed' ? '完成' : '结束'}：${truncate(event.summary || 'No summary.', 100)}`,
+          });
           break;
         }
 
         case 'web_search': {
           if (verbose) {
-            await streamer.finalize();
-            const embed = new EmbedBuilder()
-              .setColor(0x1abc9c)
-              .setTitle(`🔍 Web search`)
-              .setDescription(`\`${truncate(event.query, 200)}\``);
-            await channel.send({ embeds: [embed] });
+            queueSessionDigest(sessionId, { kind: 'search', text: `检索：${truncate(event.query, 80)}` });
           }
           break;
         }
 
         case 'tool_start': {
           await streamer.finalize();
-          if (verbose) {
-            const displayInput =
-              event.toolInput.length > 1000 ? truncate(event.toolInput, 1000) : event.toolInput;
-            const embed = new EmbedBuilder()
-              .setColor(0x3498db)
-              .setTitle(`Tool: ${event.toolName}`)
-              .setDescription(`\`\`\`json\n${displayInput}\n\`\`\``);
-            const components: ActionRowBuilder<ButtonBuilder>[] = [makeStopButton(sessionId)];
-            if (event.toolInput.length > 1000) {
-              const contentId = storeExpandable(event.toolInput);
-              components.unshift(
-                new ActionRowBuilder<ButtonBuilder>().addComponents(
-                  new ButtonBuilder()
-                    .setCustomId(`expand:${contentId}`)
-                    .setLabel('Show Full Input')
-                    .setStyle(ButtonStyle.Secondary),
-                ),
-              );
-            }
-            await channel.send({ embeds: [embed], components });
-          }
+          queueSessionDigest(sessionId, { kind: 'tool', text: `工具：${event.toolName}` });
           lastToolName = event.toolName;
           break;
         }
 
         case 'tool_result': {
-          const isTaskResult =
-            lastToolName !== null && (lastToolName === 'TaskList' || lastToolName === 'TaskGet');
-          const showResult = verbose || isTaskResult;
-          if (!showResult) break;
-
           await streamer.finalize();
-          if (isTaskResult && !verbose) {
-            const boardEmbed = renderTaskListEmbed(event.result);
-            if (boardEmbed) {
-              await channel.send({ embeds: [boardEmbed], components: [makeStopButton(sessionId)] });
-            }
-          } else if (event.result) {
-            const displayResult =
-              event.result.length > 1000 ? truncate(event.result, 1000) : event.result;
-            const embed = new EmbedBuilder()
-              .setColor(0x1abc9c)
-              .setTitle('Tool Result')
-              .setDescription(`\`\`\`\n${displayResult}\n\`\`\``);
-            const components: ActionRowBuilder<ButtonBuilder>[] = [makeStopButton(sessionId)];
-            if (event.result.length > 1000) {
-              const contentId = storeExpandable(event.result);
-              components.unshift(
-                new ActionRowBuilder<ButtonBuilder>().addComponents(
-                  new ButtonBuilder()
-                    .setCustomId(`expand:${contentId}`)
-                    .setLabel('Show Full Output')
-                    .setStyle(ButtonStyle.Secondary),
-                ),
-              );
-            }
-            await channel.send({ embeds: [embed], components });
+          if (verbose && event.result) {
+            queueSessionDigest(sessionId, {
+              kind: 'tool',
+              text: `工具结果：${truncate(lastToolName || event.toolName || 'tool', 60)}`,
+            });
           }
           break;
         }
@@ -717,40 +588,44 @@ export async function handleOutputStream(
         case 'command_execution': {
           commandCount++;
           if (recentCommands.length < 8) recentCommands.push(event.command);
-          if (shouldSuppressCommandExecution(event.command)) break;
-          await streamer.finalize();
-          const embed = renderCommandExecutionEmbed(event);
-          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
+          incrementSessionCounters(sessionId, { commandCount: 1 });
+          if (!shouldSuppressCommandExecution(event.command)) {
+            queueSessionDigest(sessionId, {
+              kind: 'command',
+              text: `命令：${truncate(event.command, 80)}${event.exitCode !== null ? `（退出码 ${event.exitCode}）` : ''}`,
+            });
+          }
           break;
         }
 
         case 'file_change': {
           fileChangeCount += event.changes.length;
+          incrementSessionCounters(sessionId, { fileChangeCount: event.changes.length });
           for (const change of event.changes) {
             if (!change.filePath) continue;
             if (changedFiles.includes(change.filePath)) continue;
             if (changedFiles.length >= 12) break;
             changedFiles.push(change.filePath);
           }
-          await streamer.finalize();
-          const embed = renderFileChangesEmbed(event);
-          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
+          queueSessionDigest(sessionId, {
+            kind: 'file',
+            text: `文件变更：${event.changes.length} 个（最近：${truncate(changedFiles.slice(-3).join(', '), 120)}）`,
+          });
           break;
         }
 
         case 'reasoning': {
           if (verbose) {
-            await streamer.finalize();
-            const embed = renderReasoningEmbed(event);
-            await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
+            queueSessionDigest(sessionId, { kind: 'reasoning', text: `推理：${truncate(event.text, 100)}` });
           }
           break;
         }
 
         case 'todo_list': {
-          await streamer.finalize();
-          const embed = renderCodexTodoListEmbed(event);
-          await channel.send({ embeds: [embed], components: [makeStopButton(sessionId)] });
+          queueSessionDigest(sessionId, {
+            kind: 'todo',
+            text: `待办更新：${event.items.filter((item) => item.completed).length}/${event.items.length} 已完成`,
+          });
           break;
         }
 
@@ -778,32 +653,37 @@ export async function handleOutputStream(
             streamer.append(`\n\`\`\`\n${event.errors.join('\n')}\n\`\`\``, { persist: false });
           }
           await streamer.finalize();
-
-          const components: (
-            | ActionRowBuilder<ButtonBuilder>
-            | ActionRowBuilder<StringSelectMenuBuilder>
-          )[] = [];
-          const checkText = lastText || '';
-          const opts = detectNumberedOptions(checkText);
-          if (opts) {
-            components.push(...makeOptionButtons(sessionId, opts));
-          } else if (detectYesNoPrompt(checkText)) {
-            components.push(makeYesNoButtons(sessionId));
+          if (session) {
+            if (mode === 'monitor') {
+              await updateSessionStatus(session, channel, {
+                state: 'running',
+                phase: '等待监督判断',
+                summary: event.success ? '本轮执行结束，等待监督判断' : '本轮执行失败，等待监督判断',
+              });
+            } else {
+              await flushSessionDigest(session, channel, true);
+              await finalizeSessionPresentation(session, channel, {
+                outcome: event.success ? 'completed' : 'error',
+                summary: truncate(lastText || (event.success ? '任务已完成。' : event.errors.join('\n') || '任务失败。'), 500),
+                terminal: false,
+              });
+            }
           }
-          const session = sessions.getSession(sessionId);
-          components.push(makeModeButtons(sessionId, mode, session?.claudePermissionMode));
-          await channel.send({ components });
           break;
         }
 
         case 'error': {
           hadError = true;
           await streamer.finalize();
-          const embed = new EmbedBuilder()
-            .setColor(0xe74c3c)
-            .setTitle('Error')
-            .setDescription(`\`\`\`\n${event.message}\n\`\`\``);
-          await channel.send({ embeds: [embed] });
+          queueSessionDigest(sessionId, { kind: 'error', text: `错误：${truncate(event.message, 120)}` });
+          if (session && mode !== 'monitor') {
+            await flushSessionDigest(session, channel, true);
+            await finalizeSessionPresentation(session, channel, {
+              outcome: 'error',
+              summary: truncate(event.message, 500),
+              terminal: false,
+            });
+          }
           break;
         }
 
@@ -812,20 +692,28 @@ export async function handleOutputStream(
           break;
         }
       }
+
+      if (session && Date.now() - lastDigestFlushAt >= 15000) {
+        await flushSessionDigest(session, channel, false);
+        lastDigestFlushAt = Date.now();
+      }
     }
   } catch (err: unknown) {
     hadError = true;
     await streamer.finalize();
     if (!isAbortError(err)) {
       const errMsg = (err as Error).message || '';
-      const embed = new EmbedBuilder()
-        .setColor(0xe74c3c)
-        .setTitle('Error')
-        .setDescription(`\`\`\`\n${errMsg}\n\`\`\``);
-      await channel.send({ embeds: [embed] });
+      queueSessionDigest(sessionId, { kind: 'error', text: `异常：${truncate(errMsg, 120)}` });
+      if (session) {
+        await flushSessionDigest(session, channel, true);
+        await finalizeSessionPresentation(session, channel, {
+          outcome: 'error',
+          summary: truncate(errMsg, 500),
+          terminal: false,
+        });
+      }
     }
   } finally {
-    clearInterval(typingInterval);
     streamer.destroy();
   }
 

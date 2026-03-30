@@ -256,6 +256,11 @@ try {
   step(report, 'agent-spawn', 'passed', `创建主代理会话 ${mainLabel}`);
 
   const mainChannel = (await guild.channels.fetch(mainSession.channelId)) as TextChannel;
+  const pinned = await mainChannel.messages.fetchPins().catch(() => null);
+  if (!pinned || pinned.size === 0) {
+    throw new Error('主会话未创建 pinned 状态消息');
+  }
+  step(report, 'status-pin', 'passed', '主会话已创建并置顶状态消息');
 
   const subLabel = `e2e-sub-${Date.now().toString().slice(-4)}`;
   const subInteraction = makeInteraction(actorId, actorTag, guild, mainChannel, 'run', {

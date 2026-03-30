@@ -15,6 +15,10 @@ import { spawnSubagent, getSubagents } from './subagent-manager.ts';
 import { archiveSession } from './archive-manager.ts';
 import { executeSessionPrompt, executeSessionContinue } from './session-executor.ts';
 import { makeModeButtons, resolveEffectiveClaudePermissionMode } from './output-handler.ts';
+import {
+  buildSessionStatusEmbed,
+  registerSessionStatusMessage,
+} from './session-output-coordinator.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import { isUserAllowed, resolvePath, formatUptime, formatRelative } from './utils.ts';
 import type { ProviderName, SessionMode } from './types.ts';
@@ -581,15 +585,12 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     sessionMgr.setMode(session.id, mode);
   }
 
-  // Send welcome embed into the session channel
-  const welcomeEmbed = new EmbedBuilder()
-    .setColor(PROVIDER_COLORS[provider])
-    .setTitle(`${PROVIDER_LABELS[provider]} Agent — ${label}`)
-    .setDescription('Type a message to start the agent. Use `/agent stop` to cancel generation.')
-    .addFields(
-      { name: 'Mode', value: MODE_LABELS[mode], inline: false },
-      { name: 'Directory', value: `\`${session.directory}\``, inline: false },
-    );
+  const statusEmbed = buildSessionStatusEmbed(session, {
+    state: 'idle',
+    phase: '待命',
+    summary: '等待首条消息',
+  });
+  statusEmbed.addFields({ name: 'Directory', value: `\`${session.directory}\``, inline: false });
 
   if (provider === 'claude' && session.claudePermissionMode) {
     const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(
@@ -600,13 +601,14 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
       effectiveClaudePermissionMode === 'bypass'
         ? '⚡ 绕过权限（完全自主）'
         : '🛡️ 普通权限（需要确认）';
-    welcomeEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
+    statusEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
   }
 
-  await sessionChannel.send({
-    embeds: [welcomeEmbed],
+  const statusMessage = await sessionChannel.send({
+    embeds: [statusEmbed],
     components: [makeModeButtons(session.id, mode, session.claudePermissionMode)],
   });
+  await registerSessionStatusMessage(session, sessionChannel, statusMessage);
 
   // Reply to original command
   const embed = new EmbedBuilder()

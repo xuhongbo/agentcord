@@ -53,6 +53,8 @@ const executeShellCommand = vi.fn();
 const listProcesses = vi.fn();
 const killProcess = vi.fn();
 const isUserAllowed = vi.fn(() => true);
+const registerSessionStatusMessage = vi.fn();
+const buildSessionStatusEmbed = vi.fn(() => ({ addFields: vi.fn() }));
 
 vi.mock('../src/config.ts', () => ({ config }));
 vi.mock('../src/project-manager.ts', () => ({
@@ -87,6 +89,10 @@ vi.mock('../src/archive-manager.ts', () => ({ archiveSession }));
 vi.mock('../src/session-executor.ts', () => ({ executeSessionPrompt, executeSessionContinue }));
 vi.mock('../src/output-handler.ts', () => ({ makeModeButtons, resolveEffectiveClaudePermissionMode }));
 vi.mock('../src/shell-handler.ts', () => ({ executeShellCommand, listProcesses, killProcess }));
+vi.mock('../src/session-output-coordinator.ts', () => ({
+  registerSessionStatusMessage,
+  buildSessionStatusEmbed,
+}));
 vi.mock('../src/utils.ts', () => ({
   isUserAllowed,
   resolvePath: (value: string) => value,
@@ -243,6 +249,17 @@ describe('project commands', () => {
 });
 
 describe('agent commands', () => {
+  it('spawn 创建后注册常驻状态消息', async () => {
+    const control = makeTextChannel({ id: 'control-1', parentId: 'cat-1', name: 'control' });
+    const statusMessage = { id: 'msg-1', pin: vi.fn(async () => undefined) };
+    const created = makeTextChannel({ id: 'created-1', parentId: 'cat-1', name: 'codex-test', send: vi.fn(async () => statusMessage) });
+    const guild = makeGuild({ channels: [control], createImpl: async () => created });
+    createSession.mockResolvedValue({ ...session, channelId: 'created-1', provider: 'codex' });
+    const interaction = makeInteraction({ subcommand: 'spawn', values: { label: 'test' }, channel: control, guild });
+    await handleAgent(interaction as never);
+    expect(registerSessionStatusMessage).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'created-1' }), created, statusMessage);
+  });
+
   it('spawn 在非 control 频道时重定向', async () => {
     const guild = makeGuild({ channels: [makeTextChannel({ id: 'control-1', parentId: 'cat-1', name: 'control' })] });
     const interaction = makeInteraction({ subcommand: 'spawn', values: { label: 'test' }, channel: makeTextChannel({ id: 'other', parentId: 'cat-1' }), guild });
