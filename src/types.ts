@@ -40,6 +40,11 @@ export interface ThreadSession {
   lastActivity: number;
   messageCount: number;
   totalCost: number;
+  // 实时作战面板字段
+  currentTurn: number; // 当前轮次（用于轮次化按钮）
+  humanResolved: boolean; // 当前轮次是否已被人工处理
+  currentInteractionMessageId?: string; // 当前等待人工的交互消息 ID
+  statusCardMessageId?: string; // 常驻状态卡消息 ID
 }
 
 export type SessionPersistData = Omit<ThreadSession, 'isGenerating'>;

@@ -30,12 +30,12 @@ import {
 import { getSession } from './thread-manager.ts';
 import * as sessions from './thread-manager.ts';
 import {
-  finalizeSessionPresentation,
-  flushSessionDigest,
-  incrementSessionCounters,
-  queueSessionDigest,
-  updateSessionStatus,
-} from './session-output-coordinator.ts';
+  initializeSessionPanel,
+  updateSessionState,
+  handleResultEvent,
+  queueDigest,
+  flushDigest,
+} from './panel-adapter.ts';
 
 // In-memory store for expandable content (with TTL cleanup)
 const expandableStore = new Map<string, ExpandableContent>();
@@ -478,11 +478,17 @@ export async function handleOutputStream(
   const session = sessions.getSession(sessionId);
 
   if (session) {
-    await updateSessionStatus(session, channel, {
-      state: 'running',
+    await initializeSessionPanel(sessionId, channel, {
+      statusCardMessageId: session.statusCardMessageId,
+      initialTurn: Math.max(session.currentTurn || 0, 1),
       phase: mode === 'monitor' ? '执行中（监控）' : '执行中',
-      summary: '本地 agent 正在工作',
-      iteration: session.workflowState.iteration || 1,
+    });
+    await updateSessionState(sessionId, {
+      type: 'work_started',
+      sessionId,
+      source: session.provider === 'claude' ? 'claude' : 'codex',
+      confidence: 'high',
+      timestamp: Date.now(),
     });
   }
 
@@ -500,12 +506,15 @@ export async function handleOutputStream(
           askUserQuestionsJson = event.questionsJson;
           await streamer.discard();
           if (session) {
-            await updateSessionStatus(session, channel, {
-              state: 'awaiting_human',
-              phase: '等待人工输入',
-              summary: '需要你回答一个问题',
+            await updateSessionState(sessionId, {
+              type: 'awaiting_human',
+              sessionId,
+              source: session.provider === 'claude' ? 'claude' : 'codex',
+              confidence: 'high',
+              timestamp: Date.now(),
+              metadata: { detail: event.questionsJson },
             });
-            await flushSessionDigest(session, channel, true);
+            await flushDigest(sessionId);
           }
           const rendered = renderAskUserQuestion(event.questionsJson, sessionId);
           if (rendered) {
@@ -517,15 +526,14 @@ export async function handleOutputStream(
 
         case 'task': {
           await streamer.finalize();
-          queueSessionDigest(sessionId, { kind: 'tool', text: `任务工具：${event.action}` });
+          queueDigest(sessionId, { kind: 'tool', text: `任务工具：${event.action}` });
           lastToolName = event.action;
           break;
         }
 
         case 'task_started': {
           await streamer.finalize();
-          incrementSessionCounters(sessionId, { subagentCount: 1 });
-          queueSessionDigest(sessionId, {
+          queueDigest(sessionId, {
             kind: 'subagent',
             text: `子代理启动：${truncate(event.description, 80)}`,
           });
@@ -534,7 +542,7 @@ export async function handleOutputStream(
 
         case 'task_progress': {
           if (event.summary) {
-            queueSessionDigest(sessionId, {
+            queueDigest(sessionId, {
               kind: 'subagent',
               text: `子代理进展：${truncate(event.summary, 100)}`,
             });
@@ -544,7 +552,7 @@ export async function handleOutputStream(
 
         case 'task_done': {
           await streamer.finalize();
-          queueSessionDigest(sessionId, {
+          queueDigest(sessionId, {
             kind: 'subagent',
             text: `子代理${event.status === 'completed' ? '完成' : '结束'}：${truncate(event.summary || 'No summary.', 100)}`,
           });
@@ -553,14 +561,14 @@ export async function handleOutputStream(
 
         case 'web_search': {
           if (verbose) {
-            queueSessionDigest(sessionId, { kind: 'search', text: `检索：${truncate(event.query, 80)}` });
+            queueDigest(sessionId, { kind: 'search', text: `检索：${truncate(event.query, 80)}` });
           }
           break;
         }
 
         case 'tool_start': {
           await streamer.finalize();
-          queueSessionDigest(sessionId, { kind: 'tool', text: `工具：${event.toolName}` });
+          queueDigest(sessionId, { kind: 'tool', text: `工具：${event.toolName}` });
           lastToolName = event.toolName;
           break;
         }
@@ -568,7 +576,7 @@ export async function handleOutputStream(
         case 'tool_result': {
           await streamer.finalize();
           if (verbose && event.result) {
-            queueSessionDigest(sessionId, {
+            queueDigest(sessionId, {
               kind: 'tool',
               text: `工具结果：${truncate(lastToolName || event.toolName || 'tool', 60)}`,
             });
@@ -588,9 +596,8 @@ export async function handleOutputStream(
         case 'command_execution': {
           commandCount++;
           if (recentCommands.length < 8) recentCommands.push(event.command);
-          incrementSessionCounters(sessionId, { commandCount: 1 });
           if (!shouldSuppressCommandExecution(event.command)) {
-            queueSessionDigest(sessionId, {
+            queueDigest(sessionId, {
               kind: 'command',
               text: `命令：${truncate(event.command, 80)}${event.exitCode !== null ? `（退出码 ${event.exitCode}）` : ''}`,
             });
@@ -600,14 +607,13 @@ export async function handleOutputStream(
 
         case 'file_change': {
           fileChangeCount += event.changes.length;
-          incrementSessionCounters(sessionId, { fileChangeCount: event.changes.length });
           for (const change of event.changes) {
             if (!change.filePath) continue;
             if (changedFiles.includes(change.filePath)) continue;
             if (changedFiles.length >= 12) break;
             changedFiles.push(change.filePath);
           }
-          queueSessionDigest(sessionId, {
+          queueDigest(sessionId, {
             kind: 'file',
             text: `文件变更：${event.changes.length} 个（最近：${truncate(changedFiles.slice(-3).join(', '), 120)}）`,
           });
@@ -616,13 +622,13 @@ export async function handleOutputStream(
 
         case 'reasoning': {
           if (verbose) {
-            queueSessionDigest(sessionId, { kind: 'reasoning', text: `推理：${truncate(event.text, 100)}` });
+            queueDigest(sessionId, { kind: 'reasoning', text: `推理：${truncate(event.text, 100)}` });
           }
           break;
         }
 
         case 'todo_list': {
-          queueSessionDigest(sessionId, {
+          queueDigest(sessionId, {
             kind: 'todo',
             text: `待办更新：${event.items.filter((item) => item.completed).length}/${event.items.length} 已完成`,
           });
@@ -655,18 +661,21 @@ export async function handleOutputStream(
           await streamer.finalize();
           if (session) {
             if (mode === 'monitor') {
-              await updateSessionStatus(session, channel, {
-                state: 'running',
-                phase: '等待监督判断',
-                summary: event.success ? '本轮执行结束，等待监督判断' : '本轮执行失败，等待监督判断',
+              await flushDigest(sessionId);
+              await updateSessionState(sessionId, {
+                type: 'work_started',
+                sessionId,
+                source: session.provider === 'claude' ? 'claude' : 'codex',
+                confidence: 'high',
+                timestamp: Date.now(),
+                metadata: {
+                  phase: '等待监督判断',
+                  summary: event.success ? '本轮执行结束，等待监督判断' : '本轮执行失败，等待监督判断',
+                },
               });
             } else {
-              await flushSessionDigest(session, channel, true);
-              await finalizeSessionPresentation(session, channel, {
-                outcome: event.success ? 'completed' : 'error',
-                summary: truncate(lastText || (event.success ? '任务已完成。' : event.errors.join('\n') || '任务失败。'), 500),
-                terminal: false,
-              });
+              await flushDigest(sessionId);
+              await handleResultEvent(sessionId, event, lastText);
             }
           }
           break;
@@ -675,13 +684,16 @@ export async function handleOutputStream(
         case 'error': {
           hadError = true;
           await streamer.finalize();
-          queueSessionDigest(sessionId, { kind: 'error', text: `错误：${truncate(event.message, 120)}` });
+          queueDigest(sessionId, { kind: 'error', text: `错误：${truncate(event.message, 120)}` });
           if (session && mode !== 'monitor') {
-            await flushSessionDigest(session, channel, true);
-            await finalizeSessionPresentation(session, channel, {
-              outcome: 'error',
-              summary: truncate(event.message, 500),
-              terminal: false,
+            await flushDigest(sessionId);
+            await updateSessionState(sessionId, {
+              type: 'errored',
+              sessionId,
+              source: session.provider === 'claude' ? 'claude' : 'codex',
+              confidence: 'high',
+              timestamp: Date.now(),
+              metadata: { errorMessage: event.message },
             });
           }
           break;
@@ -694,7 +706,7 @@ export async function handleOutputStream(
       }
 
       if (session && Date.now() - lastDigestFlushAt >= 15000) {
-        await flushSessionDigest(session, channel, false);
+        await flushDigest(sessionId);
         lastDigestFlushAt = Date.now();
       }
     }
@@ -703,13 +715,16 @@ export async function handleOutputStream(
     await streamer.finalize();
     if (!isAbortError(err)) {
       const errMsg = (err as Error).message || '';
-      queueSessionDigest(sessionId, { kind: 'error', text: `异常：${truncate(errMsg, 120)}` });
+      queueDigest(sessionId, { kind: 'error', text: `异常：${truncate(errMsg, 120)}` });
       if (session) {
-        await flushSessionDigest(session, channel, true);
-        await finalizeSessionPresentation(session, channel, {
-          outcome: 'error',
-          summary: truncate(errMsg, 500),
-          terminal: false,
+        await flushDigest(sessionId);
+        await updateSessionState(sessionId, {
+          type: 'errored',
+          sessionId,
+          source: session.provider === 'claude' ? 'claude' : 'codex',
+          confidence: 'high',
+          timestamp: Date.now(),
+          metadata: { errorMessage: errMsg },
         });
       }
     }

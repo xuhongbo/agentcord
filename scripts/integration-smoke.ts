@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   Client,
   GatewayIntentBits,
@@ -21,6 +22,8 @@ import {
 import { loadProjects } from '../src/project-manager.ts';
 import { loadSessions, getSession, getSessionsByCategory } from '../src/thread-manager.ts';
 import { loadArchived, getArchivedSessions } from '../src/archive-manager.ts';
+import { CodexLogMonitor } from '../src/monitors/codex-log-monitor.ts';
+import { handleCodexMonitorStateChange } from '../src/codex-monitor-bridge.ts';
 
 type OptionMap = Record<string, string | null | undefined>;
 
@@ -40,6 +43,7 @@ interface IntegrationReport {
   temporaryCategoryCreated: boolean;
   historyChannelId?: string;
   mainSessionChannelId?: string;
+  codexSessionChannelId?: string;
   subagentThreadId?: string;
   reportPath: string;
   steps: StepResult[];
@@ -117,6 +121,19 @@ function step(
 
 async function waitFor(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(
+  predicate: () => Promise<boolean>,
+  ms: number,
+  label: string,
+): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await waitFor(500);
+  }
+  throw new Error(`Timed out: ${label}`);
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -327,12 +344,101 @@ try {
       '未配置 CODEX_API_KEY，跳过真实 Codex 生成测试',
     );
   } else {
-    step(
-      report,
-      'provider-codex-smoke',
-      'passed',
-      '已检测到 CODEX_API_KEY，可在下一轮扩展 Codex 真正出流测试',
+    const codexLabel = `e2e-codex-${Date.now().toString().slice(-4)}`;
+    const codexInteraction = makeInteraction(actorId, actorTag, guild, bootstrapChannel, 'spawn', {
+      label: codexLabel,
+      provider: 'codex',
+      mode: 'auto',
+    });
+    await withTimeout(handleAgent(codexInteraction), 30000, 'provider-codex-spawn');
+
+    const codexSession = getSessionsByCategory(category.id).find(
+      (session) => session.type === 'persistent' && session.agentLabel === codexLabel,
     );
+    if (!codexSession) {
+      throw new Error('Codex 冒烟会话未创建成功');
+    }
+    report.codexSessionChannelId = codexSession.channelId;
+
+    const codexChannel = (await guild.channels.fetch(codexSession.channelId)) as TextChannel;
+    await withTimeout(
+      executeSessionPrompt(
+        getSession(codexSession.id)!,
+        codexChannel,
+        'Reply with exactly: THREADCORD_CODEX_E2E_OK',
+      ),
+      60000,
+      'provider-codex-smoke',
+    );
+    step(report, 'provider-codex-smoke', 'passed', '已执行 Codex 真实生成冒烟');
+
+    const liveCodexSession = getSession(codexSession.id);
+    if (!liveCodexSession?.statusCardMessageId) {
+      throw new Error('Codex 会话缺少状态卡消息 ID，无法验证监控驱动状态更新');
+    }
+
+    const providerSessionId =
+      liveCodexSession.providerSessionId || '019d4200-1111-2222-3333-444444444444';
+    const monitorBaseDir = mkdtempSync(join(tmpdir(), 'threadcord-codex-monitor-'));
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mi = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const dayDir = join(monitorBaseDir, yyyy, mm, dd);
+    mkdirSync(dayDir, { recursive: true });
+    const rolloutPath = join(
+      dayDir,
+      `rollout-${yyyy}-${mm}-${dd}T${hh}-${mi}-${ss}-${providerSessionId}.jsonl`,
+    );
+
+    const monitor = new CodexLogMonitor(monitorBaseDir, (sessionId, state, event, extra) => {
+      void handleCodexMonitorStateChange(
+        (channelId) => guild.channels.cache.get(channelId),
+        sessionId,
+        state,
+        event,
+        extra,
+      );
+    });
+
+    try {
+      monitor.start();
+      writeFileSync(
+        rolloutPath,
+        `${JSON.stringify({ type: 'session_meta', payload: { cwd: liveCodexSession.directory } })}\n`,
+        'utf-8',
+      );
+
+      appendFileSync(
+        rolloutPath,
+        `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } })}\n`,
+        'utf-8',
+      );
+      await waitForCondition(async () => {
+        const statusMessage = await codexChannel.messages.fetch(liveCodexSession.statusCardMessageId!);
+        return statusMessage.embeds[0]?.title?.includes('正在思考') ?? false;
+      }, 10000, 'codex-monitor-thinking');
+      step(report, 'codex-monitor-thinking', 'passed', 'Codex 日志监控已驱动状态卡进入“正在思考”');
+
+      appendFileSync(
+        rolloutPath,
+        `${JSON.stringify({
+          type: 'response_item',
+          payload: { type: 'function_call', name: 'shell_command', arguments: JSON.stringify({ command: 'pwd' }) },
+        })}\n`,
+        'utf-8',
+      );
+      await waitForCondition(async () => {
+        const statusMessage = await codexChannel.messages.fetch(liveCodexSession.statusCardMessageId!);
+        return statusMessage.embeds[0]?.title?.includes('正在执行') ?? false;
+      }, 10000, 'codex-monitor-working');
+      step(report, 'codex-monitor-working', 'passed', 'Codex 日志监控已驱动状态卡进入“正在执行”');
+    } finally {
+      monitor.stop();
+    }
   }
 
   const archivedBefore = getArchivedSessions(category.id).length;

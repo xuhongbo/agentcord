@@ -15,10 +15,7 @@ import { spawnSubagent, getSubagents } from './subagent-manager.ts';
 import { archiveSession } from './archive-manager.ts';
 import { executeSessionPrompt, executeSessionContinue } from './session-executor.ts';
 import { makeModeButtons, resolveEffectiveClaudePermissionMode } from './output-handler.ts';
-import {
-  buildSessionStatusEmbed,
-  registerSessionStatusMessage,
-} from './session-output-coordinator.ts';
+import * as panelAdapter from './panel-adapter.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
 import { isUserAllowed, resolvePath, formatUptime, formatRelative } from './utils.ts';
 import type { ProviderName, SessionMode } from './types.ts';
@@ -49,6 +46,32 @@ const MODE_LABELS: Record<SessionMode, string> = {
   normal: '🛡️ Normal — asks before destructive ops',
   monitor: '🧠 Monitor — steers until complete',
 };
+
+type ExistingStatusCardRegistrar = (
+  sessionId: string,
+  channel: TextChannel,
+  statusCardMessageId: string,
+) => Promise<void>;
+
+async function registerStatusCardWithPanelAdapter(
+  sessionId: string,
+  channel: TextChannel,
+  statusCardMessageId: string,
+): Promise<boolean> {
+  const adapter = panelAdapter as unknown as {
+    registerExistingStatusCard?: ExistingStatusCardRegistrar;
+  };
+
+  if (typeof adapter.registerExistingStatusCard !== 'function') {
+    log(
+      `[panel-adapter] registerExistingStatusCard 未暴露，session=${sessionId}`,
+    );
+    return false;
+  }
+
+  await adapter.registerExistingStatusCard(sessionId, channel, statusCardMessageId);
+  return true;
+}
 
 const CONTROL_CHANNEL_NAME = 'control';
 
@@ -585,30 +608,36 @@ async function handleAgentSpawn(interaction: ChatInputCommandInteraction): Promi
     sessionMgr.setMode(session.id, mode);
   }
 
-  const statusEmbed = buildSessionStatusEmbed(session, {
-    state: 'idle',
-    phase: '待命',
-    summary: '等待首条消息',
-  });
-  statusEmbed.addFields({ name: 'Directory', value: `\`${session.directory}\``, inline: false });
-
-  if (provider === 'claude' && session.claudePermissionMode) {
-    const effectiveClaudePermissionMode = resolveEffectiveClaudePermissionMode(
-      mode,
-      session.claudePermissionMode,
-    );
-    const permLabel =
-      effectiveClaudePermissionMode === 'bypass'
-        ? '⚡ 绕过权限（完全自主）'
-        : '🛡️ 普通权限（需要确认）';
-    statusEmbed.addFields({ name: 'Claude 权限', value: permLabel, inline: true });
-  }
+  const statusEmbed = new EmbedBuilder()
+    .setColor(PROVIDER_COLORS[provider])
+    .setTitle('💤 待命')
+    .setDescription('等待首条消息');
 
   const statusMessage = await sessionChannel.send({
     embeds: [statusEmbed],
     components: [makeModeButtons(session.id, mode, session.claudePermissionMode)],
   });
-  await registerSessionStatusMessage(session, sessionChannel, statusMessage);
+  sessionMgr.setCurrentInteractionMessage(session.id, undefined);
+
+  let registered = false;
+  try {
+    registered = await registerStatusCardWithPanelAdapter(session.id, sessionChannel, statusMessage.id);
+  } catch (err: unknown) {
+    log(
+      `[panel-adapter] 状态卡注册失败，session=${session.id}，错误：${(err as Error).message}`,
+    );
+  }
+
+  if (!registered) {
+    await interaction.editReply(
+      `Failed to initialize session panel for "${label}".`,
+    );
+    return;
+  }
+  sessionMgr.setStatusCardBinding(session.id, {
+    messageId: statusMessage.id,
+  });
+  log(`[panel-adapter] 状态卡已注册，session=${session.id}`);
 
   // Reply to original command
   const embed = new EmbedBuilder()

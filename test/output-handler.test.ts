@@ -2,23 +2,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderEvent } from '../src/providers/types.ts';
 
 const mocks = vi.hoisted(() => ({
-  updateSessionStatus: vi.fn(),
-  queueSessionDigest: vi.fn(),
-  flushSessionDigest: vi.fn(),
-  finalizeSessionPresentation: vi.fn(),
-  incrementSessionCounters: vi.fn(),
+  initializeSessionPanel: vi.fn(),
+  updateSessionState: vi.fn(),
+  handleResultEvent: vi.fn(),
+  handleAwaitingHuman: vi.fn(),
+  queueDigest: vi.fn(),
+  flushDigest: vi.fn(),
   getSession: vi.fn(),
+  updateSession: vi.fn(),
 }));
 
-vi.mock('../src/session-output-coordinator.ts', () => ({
-  updateSessionStatus: mocks.updateSessionStatus,
-  queueSessionDigest: mocks.queueSessionDigest,
-  flushSessionDigest: mocks.flushSessionDigest,
-  finalizeSessionPresentation: mocks.finalizeSessionPresentation,
-  incrementSessionCounters: mocks.incrementSessionCounters,
+vi.mock('../src/panel-adapter.ts', () => ({
+  initializeSessionPanel: mocks.initializeSessionPanel,
+  updateSessionState: mocks.updateSessionState,
+  handleResultEvent: mocks.handleResultEvent,
+  handleAwaitingHuman: mocks.handleAwaitingHuman,
+  queueDigest: mocks.queueDigest,
+  flushDigest: mocks.flushDigest,
 }));
 vi.mock('../src/thread-manager.ts', () => ({
   getSession: mocks.getSession,
+  updateSession: mocks.updateSession,
   getSessionByChannel: vi.fn(),
   updateWorkflowState: vi.fn(),
   setMode: vi.fn(),
@@ -88,12 +92,34 @@ describe('handleOutputStream', () => {
       'session-1',
     );
 
-    expect(mocks.queueSessionDigest).toHaveBeenCalled();
-    expect(mocks.finalizeSessionPresentation).toHaveBeenCalled();
+    expect(mocks.queueDigest).toHaveBeenCalled();
+    expect(mocks.handleResultEvent).toHaveBeenCalled();
     expect(channel.sent).toEqual([]);
   });
 
-  it('ask_user 仍会直接发送交互问题', async () => {
+  it('本轮总结传给协调器时不提前截断正文', async () => {
+    const channel = createFakeChannel();
+    const longText = 'A'.repeat(5000) + 'B'.repeat(5000);
+
+    await handleOutputStream(
+      streamEvents([
+        { type: 'text_delta', text: longText },
+        { type: 'result', success: true, costUsd: 0, durationMs: 25, numTurns: 1, errors: [] },
+      ]),
+      channel as Parameters<typeof handleOutputStream>[1],
+      'session-1',
+    );
+
+    expect(mocks.handleResultEvent).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ type: 'result' }),
+      expect.stringContaining('A'.repeat(200)),
+    );
+    const call = mocks.handleResultEvent.mock.calls.at(-1);
+    expect(String(call?.[2]).includes('B'.repeat(200))).toBe(true);
+  });
+
+  it('ask_user 只发送问题卡，不追加允许继续/拒绝卡', async () => {
     const channel = createFakeChannel();
 
     await handleOutputStream(
@@ -110,6 +136,32 @@ describe('handleOutputStream', () => {
     );
 
     expect(channel.sent.length).toBe(1);
-    expect(mocks.updateSessionStatus).toHaveBeenCalled();
+    expect(mocks.updateSessionState).toHaveBeenCalledWith(
+      'session-2',
+      expect.objectContaining({ type: 'awaiting_human' }),
+    );
+    expect(mocks.handleAwaitingHuman).not.toHaveBeenCalled();
+    expect(mocks.updateSession).not.toHaveBeenCalled();
+  });
+
+  it('monitor 模式下 result 不触发最终总结', async () => {
+    const channel = createFakeChannel();
+
+    await handleOutputStream(
+      streamEvents([
+        { type: 'text_delta', text: 'work' },
+        { type: 'result', success: true, costUsd: 0, durationMs: 25, numTurns: 1, errors: [] },
+      ]),
+      channel as Parameters<typeof handleOutputStream>[1],
+      'session-1',
+      false,
+      'monitor',
+    );
+
+    expect(mocks.handleResultEvent).not.toHaveBeenCalled();
+    expect(mocks.updateSessionState).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ type: 'work_started' }),
+    );
   });
 });

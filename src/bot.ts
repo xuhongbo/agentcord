@@ -6,6 +6,7 @@ import {
   ComponentType,
   ChannelType,
   type TextChannel,
+  type AnyThreadChannel,
   type Interaction,
   type Message,
 } from 'discord.js';
@@ -26,8 +27,16 @@ import {
 } from './command-handlers.ts';
 import { handleMessage } from './message-handler.ts';
 import { handleButton, handleSelectMenu } from './button-handler.ts';
-import { loadSessions, getAllSessions, endSession, getSessionByChannel } from './thread-manager.ts';
+import {
+  loadSessions,
+  getAllSessions,
+  endSession,
+  getSessionByChannel,
+} from './thread-manager.ts';
 import { loadProjects } from './project-manager.ts';
+import { CodexLogMonitor } from './monitors/codex-log-monitor.ts';
+import { handleCodexMonitorStateChange } from './codex-monitor-bridge.ts';
+import { homedir } from 'node:os';
 import { runSubagentWatchdog } from './subagent-manager.ts';
 import { loadArchived, checkAutoArchive } from './archive-manager.ts';
 import { startSync, stopSync } from './session-sync.ts';
@@ -35,6 +44,7 @@ import { startHealthMonitor, stopHealthMonitor, setBotStartTime } from './health
 
 let client: Client;
 let logChannel: TextChannel | null = null;
+let codexMonitor: CodexLogMonitor | null = null;
 const logBuffer: string[] = [];
 let logTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -293,6 +303,20 @@ export async function startBot(): Promise<void> {
     setBotStartTime(Date.now());
     startSync(client);
 
+    // Start Codex log monitor
+    const codexBaseDir = join(homedir(), '.codex', 'sessions');
+    codexMonitor = new CodexLogMonitor(codexBaseDir, (sessionId, state, event, extra) => {
+      void handleCodexMonitorStateChange(
+        (channelId) => client.channels.cache.get(channelId),
+        sessionId,
+        state,
+        event,
+        extra,
+      );
+    });
+    codexMonitor.start();
+    botLog('Codex log monitor started');
+
     // Start health monitoring
     if (config.healthReportEnabled) {
       startHealthMonitor(client, botLog);
@@ -375,6 +399,10 @@ export async function startBot(): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     botLog('Shutting down...');
+    if (codexMonitor) {
+      codexMonitor.stop();
+      codexMonitor = null;
+    }
     await flushLogs();
     stopSync();
     stopHealthMonitor();

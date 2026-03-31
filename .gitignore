@@ -5,3 +5,4 @@ dist/
 .discord-friends/
 .restart
 local-acceptance/
+tmp/

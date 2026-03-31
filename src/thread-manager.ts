@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { sep } from 'node:path';
 import { ensureProvider, type ProviderEvent, type ContentBlock } from './providers/index.ts';
 import { Store } from './persistence.ts';
 import { getAgent } from './agents.ts';
@@ -84,10 +85,9 @@ export async function loadSessions(): Promise<void> {
   let cleaned = false;
 
   for (const s of data) {
-    // Skip sessions from old architecture (no categoryId) — incompatible format
     if (!s.categoryId) {
       cleaned = true;
-      console.warn(`Skipping legacy session "${s.id}" (no categoryId — old architecture).`);
+      console.warn(`Skipping invalid persisted session "${s.id}" (missing categoryId).`);
       continue;
     }
     if (!s.channelId) {
@@ -113,6 +113,10 @@ export async function loadSessions(): Promise<void> {
       subagentDepth: s.subagentDepth ?? 0,
       type: s.type ?? 'persistent',
       workflowState: s.workflowState ?? createDefaultWorkflowState(),
+      currentTurn: s.currentTurn ?? 0,
+      humanResolved: s.humanResolved ?? false,
+      currentInteractionMessageId: s.currentInteractionMessageId,
+      statusCardMessageId: s.statusCardMessageId,
       isGenerating: false,
     });
     idToChannelId.set(s.id, s.channelId);
@@ -158,6 +162,10 @@ async function persistSessionsNow(): Promise<void> {
       lastActivity: s.lastActivity,
       messageCount: s.messageCount,
       totalCost: s.totalCost,
+      currentTurn: s.currentTurn,
+      humanResolved: s.humanResolved,
+      currentInteractionMessageId: s.currentInteractionMessageId,
+      statusCardMessageId: s.statusCardMessageId,
     });
   }
   await sessionStore.write(data);
@@ -272,6 +280,10 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     lastActivity: Date.now(),
     messageCount: 0,
     totalCost: 0,
+    currentTurn: 0,
+    humanResolved: false,
+    currentInteractionMessageId: undefined,
+    statusCardMessageId: undefined,
   };
 
   sessions.set(channelId, session);
@@ -301,6 +313,18 @@ export function getSessionByChannel(channelId: string): ThreadSession | undefine
 /** Backward-compat alias (subagent sessions are still threads). */
 export const getSessionByThread = getSessionByChannel;
 
+export function getSessionByProviderSession(
+  provider: ProviderName,
+  providerSessionId: string,
+): ThreadSession | undefined {
+  if (!providerSessionId) return undefined;
+  for (const session of sessions.values()) {
+    if (session.provider !== provider) continue;
+    if (session.providerSessionId === providerSessionId) return session;
+  }
+  return undefined;
+}
+
 /** List all sessions under a project category. */
 export function getSessionsByCategory(categoryId: string): ThreadSession[] {
   const channelIds = sessionsByCategory.get(categoryId);
@@ -316,6 +340,122 @@ export function getSessionsByCategory(categoryId: string): ThreadSession[] {
 
 export function getAllSessions(): ThreadSession[] {
   return Array.from(sessions.values());
+}
+
+export function getSessionByProviderSessionId(
+  provider: ProviderName,
+  providerSessionId: string,
+): ThreadSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.provider !== provider) continue;
+    if (!session.providerSessionId) continue;
+    if (session.providerSessionId === providerSessionId) return session;
+  }
+  return undefined;
+}
+
+export function findCodexSessionForMonitor(
+  providerSessionId: string | undefined,
+  cwd: string | undefined,
+): ThreadSession | undefined {
+  if (providerSessionId) {
+    const byProviderId = getSessionByProviderSessionId('codex', providerSessionId);
+    if (byProviderId) return byProviderId;
+  }
+
+  if (!cwd) return undefined;
+  const normalizedCwd = resolvePath(cwd);
+  let matched: ThreadSession | undefined;
+  let matchedLen = -1;
+
+  for (const session of sessions.values()) {
+    if (session.provider !== 'codex') continue;
+    const sessionDir = resolvePath(session.directory);
+    if (normalizedCwd !== sessionDir && !normalizedCwd.startsWith(`${sessionDir}/`)) continue;
+    if (sessionDir.length > matchedLen) {
+      matched = session;
+      matchedLen = sessionDir.length;
+    }
+  }
+
+  return matched;
+}
+
+function stripCodexMonitorPrefix(sessionId: string): string {
+  return sessionId.startsWith('codex:') ? sessionId.slice('codex:'.length) : sessionId;
+}
+
+export function findCodexSessionByProviderSessionId(providerSessionId: string): ThreadSession | undefined {
+  const normalized = stripCodexMonitorPrefix(providerSessionId);
+  for (const session of sessions.values()) {
+    if (session.provider !== 'codex') continue;
+    if (!session.providerSessionId) continue;
+    if (session.providerSessionId === normalized || session.providerSessionId === providerSessionId) {
+      return session;
+    }
+  }
+  return undefined;
+}
+
+export function findCodexSessionByCwd(cwd: string): ThreadSession | undefined {
+  const normalizedCwd = resolvePath(cwd);
+  let best: ThreadSession | undefined;
+  let bestLen = -1;
+
+  for (const session of sessions.values()) {
+    if (session.provider !== 'codex') continue;
+    const dir = resolvePath(session.directory);
+    const isMatch = normalizedCwd === dir || normalizedCwd.startsWith(`${dir}${sep}`);
+    if (!isMatch) continue;
+    if (dir.length > bestLen) {
+      best = session;
+      bestLen = dir.length;
+    }
+  }
+
+  return best;
+}
+
+export function resolveCodexSessionFromMonitor(
+  monitorSessionId: string,
+  cwd?: string,
+): ThreadSession | undefined {
+  const byProviderSessionId = findCodexSessionByProviderSessionId(monitorSessionId);
+  if (byProviderSessionId) return byProviderSessionId;
+  if (cwd) return findCodexSessionByCwd(cwd);
+  return undefined;
+}
+
+export function updateSession(
+  sessionId: string,
+  patch: Partial<ThreadSession>,
+): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  Object.assign(session, patch);
+  debouncedSave();
+}
+
+export function setStatusCardBinding(
+  sessionId: string,
+  binding: {
+    messageId?: string;
+  },
+): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  session.statusCardMessageId = binding.messageId;
+  debouncedSave();
+}
+
+export function setCurrentInteractionMessage(
+  sessionId: string,
+  messageId: string | undefined,
+): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  session.currentInteractionMessageId = messageId;
+  debouncedSave();
 }
 
 export async function endSession(id: string): Promise<void> {
