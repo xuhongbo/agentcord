@@ -70,6 +70,8 @@ export class StateMachine {
   private legacySessions = new Map<string, SessionStateSnapshot>();
   private transitionHistory = new Map<string, StateTransition[]>();
   private completedTimers = new Map<string, NodeJS.Timeout>();
+  private completedTimerTokens = new Map<string, number>();
+  private completedTimerSequence = 0;
 
   /**
    * 获取会话状态，如果不存在则创建默认状态
@@ -272,10 +274,13 @@ export class StateMachine {
 
     if (!mappedState) return current;
 
+    if (event.type === 'session_idle' && !this.isSessionIdleTransitionAllowed(event, current)) {
+      return current;
+    }
+
     const allowTransition =
       event.type === 'human_resolved' ||
       event.type === 'completed' ||
-      event.type === 'session_idle' ||
       event.type === 'session_ended' ||
       this.shouldTransition(
         current.state,
@@ -310,11 +315,19 @@ export class StateMachine {
       patch.isWaitingHuman = false;
     }
 
+    const shouldResetCompletedTimer =
+      event.type === 'session_started' ||
+      event.type === 'session_ended' ||
+      (event.type !== 'completed' && mappedState !== 'completed' && current.state === 'completed');
+
+    if (shouldResetCompletedTimer) {
+      this.clearCompletedTimer(event.sessionId);
+    }
+
     if (mappedState === 'completed') {
-      const existingTimer = this.completedTimers.get(event.sessionId);
-      if (existingTimer) {
-        clearTimeout(existingTimer);
-      }
+      this.clearCompletedTimer(event.sessionId);
+      const timerToken = ++this.completedTimerSequence;
+      const turn = current.turn;
 
       const timer = setTimeout(() => {
         this.applyPlatformEvent({
@@ -324,12 +337,17 @@ export class StateMachine {
           stateSource: 'formal',
           confidence: 'high',
           timestamp: Date.now(),
-          metadata: { phase: '待命' },
+          metadata: {
+            phase: '待命',
+            idleTimerToken: timerToken,
+            turn,
+          },
         });
-        this.completedTimers.delete(event.sessionId);
+        this.clearCompletedTimer(event.sessionId);
       }, 3000);
 
       this.completedTimers.set(event.sessionId, timer);
+      this.completedTimerTokens.set(event.sessionId, timerToken);
     }
 
     this.updateSession(event.sessionId, patch);
@@ -343,11 +361,7 @@ export class StateMachine {
     this.sessions.delete(sessionId);
     this.legacySessions.delete(sessionId);
     this.transitionHistory.delete(sessionId);
-    const completedTimer = this.completedTimers.get(sessionId);
-    if (completedTimer) {
-      clearTimeout(completedTimer);
-      this.completedTimers.delete(sessionId);
-    }
+    this.clearCompletedTimer(sessionId);
   }
 
   private createDefaultState(): StateMachineState {
@@ -371,6 +385,49 @@ export class StateMachine {
       isError: false,
       isStalled: false,
     };
+  }
+
+  private clearCompletedTimer(sessionId: string): void {
+    const completedTimer = this.completedTimers.get(sessionId);
+    if (completedTimer) {
+      clearTimeout(completedTimer);
+      this.completedTimers.delete(sessionId);
+    }
+    this.completedTimerTokens.delete(sessionId);
+  }
+
+  private isSessionIdleTransitionAllowed(
+    event: PlatformEvent,
+    current: SessionStateSnapshot,
+  ): boolean {
+    if (current.state === 'completed') {
+      return true;
+    }
+
+    const idleTimerToken = this.readNumericMetadata(event.metadata, 'idleTimerToken');
+    if (idleTimerToken === undefined) {
+      return false;
+    }
+
+    const activeTimerToken = this.completedTimerTokens.get(event.sessionId);
+    if (activeTimerToken !== idleTimerToken) {
+      return false;
+    }
+
+    const timerTurn = this.readNumericMetadata(event.metadata, 'turn');
+    if (timerTurn !== undefined && timerTurn !== current.turn) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private readNumericMetadata(
+    metadata: Record<string, unknown> | undefined,
+    field: string,
+  ): number | undefined {
+    const value = metadata?.[field];
+    return typeof value === 'number' ? value : undefined;
   }
 }
 
