@@ -13,6 +13,7 @@ import { getProjectByName } from '../src/project-registry.ts';
 import { loadRegistry } from '../src/project-registry.ts';
 import { loadProjects } from '../src/project-manager.ts';
 import { loadSessions, getSessionsByCategory } from '../src/thread-manager.ts';
+import { cleanupSessionsById } from '../src/session-housekeeping.ts';
 
 function makeOptions(subcommand: string, values: Record<string, string | null | undefined>) {
   return {
@@ -107,6 +108,7 @@ const createdLabels = [
   `multi-a-${Date.now().toString().slice(-4)}`,
   `multi-b-${(Date.now() + 1).toString().slice(-4)}`,
 ];
+const createdSessionIds = new Set<string>();
 
 try {
   if (!existingControl) {
@@ -123,6 +125,13 @@ try {
       mode: 'auto',
     });
     await handleAgent(interaction);
+
+    const created = getSessionsByCategory(category.id).find(
+      (session) => session.type === 'persistent' && session.agentLabel === label,
+    );
+    if (created) {
+      createdSessionIds.add(created.id);
+    }
   }
 
   const sessions = getSessionsByCategory(category.id).filter(
@@ -149,6 +158,11 @@ try {
   writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } finally {
+  await cleanupSessionsById(
+    guild,
+    createdSessionIds,
+    'threadcord multi-session smoke cleanup',
+  ).catch(() => {});
   if (!existingControl) {
     await controlChannel.delete('threadcord multi-session smoke cleanup').catch(() => {});
   }

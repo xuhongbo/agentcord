@@ -2,6 +2,15 @@
 
 > **大前提：** agentcord 的目标形态是全局安装的命令行工具（`npm install -g agentcord`），以后台常驻服务运行。本计划是实现这一目标的第一步 — 将配置从项目目录的 .env 迁移到全局位置。
 
+> **状态更新（2026-03-31）：方案已演化。**
+>
+> 该计划的“全局配置”目标已经落地，但文中的命令面仍保留了历史术语：
+>
+> - 命令名已从 `agentcord` 演化为 `threadcord`
+> - 文中提到的旧 `/session new`、`/session resume` 只是当时的调用面假设；当前产品已经演化为 `/project setup` + `/agent spawn`
+>
+> 这不影响本计划的核心结论：配置已迁移到全局存储，目录白名单与默认目录模型已经退出主路径。
+
 **Goal:** 将机器人配置从 cwd/.env 迁移到 Configstore 全局存储，同时将数据目录从 cwd/.discord-friends/ 迁移到 ~/.agentcord/
 
 **Architecture:** 引入 Configstore 作为全局配置存储，重写 config.ts 从 Configstore 读取而非 process.env，重写 setup.ts 写入 Configstore 而非 .env 文件，更新 persistence.ts 使用固定全局路径，更新 cli.ts 入口移除 .env 检查，更新 daemon.ts 移除 WorkingDirectory 依赖。这样后续本地会话同步可稳定读取全局项目注册表与 JSONL 状态，而不依赖当前工作目录。

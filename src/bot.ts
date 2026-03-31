@@ -36,17 +36,29 @@ import {
 import { loadProjects } from './project-manager.ts';
 import { CodexLogMonitor } from './monitors/codex-log-monitor.ts';
 import { handleCodexMonitorStateChange } from './codex-monitor-bridge.ts';
+import { startHookServer, stopHookServer } from './hook-server.ts';
+import { startHookWatcher, stopHookWatcher } from './hook-watcher.ts';
+import {
+  checkHookHealth,
+  logHookHealthStatus,
+  sendHookHealthNotification,
+} from './hook-health-check.ts';
 import { homedir } from 'node:os';
 import { runSubagentWatchdog } from './subagent-manager.ts';
 import { loadArchived, checkAutoArchive } from './archive-manager.ts';
 import { startSync, stopSync } from './session-sync.ts';
 import { startHealthMonitor, stopHealthMonitor, setBotStartTime } from './health-monitor.ts';
+import { gateCoordinator } from './state/gate-coordinator.ts';
+import { reconcileSessionRecordsWithGuild } from './session-housekeeping.ts';
+import { startPerformanceMonitoring, stopPerformanceMonitoring } from './panel-adapter.ts';
 
 let client: Client;
 let logChannel: TextChannel | null = null;
 let codexMonitor: CodexLogMonitor | null = null;
+const unmanagedCodexHintedSessions = new Set<string>();
 const logBuffer: string[] = [];
 let logTimer: ReturnType<typeof setTimeout> | null = null;
+let gateHousekeepingTimer: ReturnType<typeof setInterval> | null = null;
 
 export async function routeInteractionCreate(interaction: Interaction): Promise<void> {
   try {
@@ -187,6 +199,57 @@ export async function flushLogs(): Promise<void> {
   }
 }
 
+/**
+ * 重启时失效所有待处理门控
+ * 参考设计文档 11.5.1 节
+ */
+async function invalidatePendingGatesOnRestart(client: Client): Promise<void> {
+  const invalidated = gateCoordinator.invalidateAllOnRestart();
+
+  if (invalidated.length === 0) {
+    return;
+  }
+
+  console.log(`[GateInvalidation] Invalidating ${invalidated.length} pending gates on restart`);
+
+  // 更新 Discord 交互卡
+  for (const { gateId, discordMessageId } of invalidated) {
+    if (!discordMessageId) continue;
+
+    const gate = gateCoordinator.getGate(gateId);
+    if (!gate) continue;
+
+    try {
+      const session = getAllSessions().find(s => s.id === gate.sessionId);
+      if (!session) continue;
+
+      const channel = client.channels.cache.get(session.channelId) as TextChannel | undefined;
+      if (!channel) continue;
+
+      const message = await channel.messages.fetch(discordMessageId);
+      if (!message) continue;
+
+      // 禁用所有按钮并添加失效标注
+      await message.edit({
+        components: [],
+        embeds: message.embeds.map((e) => ({
+          ...e,
+          color: 0x808080, // 灰色
+          footer: {
+            text: '⚠️ 守护进程已重启，此审批已失效 - 请在终端直接处理，或重新触发操作'
+          },
+        })),
+      });
+
+      console.log(`[GateInvalidation] Updated Discord message for gate ${gateId}`);
+    } catch (err) {
+      console.error(`[GateInvalidation] Failed to update message for gate ${gateId}:`, err);
+    }
+  }
+
+  botLog(`重启时失效了 ${invalidated.length} 个待处理门控`);
+}
+
 function updatePresence(): void {
   const all = getAllSessions();
   const generating = all.filter((s) => s.isGenerating).length;
@@ -223,6 +286,25 @@ async function cleanupOldMessages(): Promise<void> {
     } catch {
       /* channel may not exist */
     }
+  }
+}
+
+async function notifyUnmanagedCodexHint(session: { id: string; channelId: string }): Promise<void> {
+  if (unmanagedCodexHintedSessions.has(session.id)) return;
+  unmanagedCodexHintedSessions.add(session.id);
+
+  const channel = client.channels.cache.get(session.channelId) as TextChannel | undefined;
+  if (!channel) return;
+
+  try {
+    await channel.send(
+      [
+        '💡 提示：此 Codex 会话为非受管模式，仅支持状态监控',
+        '如需远程审批能力，请使用 `threadcord codex` 命令启动会话',
+      ].join('\n'),
+    );
+  } catch (err) {
+    console.warn('[Codex Hint] 发送非受管提示失败:', err);
   }
 }
 
@@ -298,29 +380,93 @@ export async function startBot(): Promise<void> {
       }
     }
 
+    const reconciled = guild ? await reconcileSessionRecordsWithGuild(guild) : null;
+    if (reconciled && reconciled.endedMissingSessions > 0) {
+      botLog(`Reconciled ${reconciled.endedMissingSessions} stale session record(s) on startup.`);
+    }
+
     botLog(`Bot online. ${getAllSessions().length} session(s) restored.`);
     updatePresence();
     setBotStartTime(Date.now());
+
+    // 重启时失效所有待处理门控（设计文档 11.5.1 节）
+    await invalidatePendingGatesOnRestart(client);
+
     startSync(client);
 
-    // Start Codex log monitor
+    // Start Codex log monitor with fast registration callback
     const codexBaseDir = join(homedir(), '.codex', 'sessions');
-    codexMonitor = new CodexLogMonitor(codexBaseDir, (sessionId, state, event, extra) => {
-      void handleCodexMonitorStateChange(
-        (channelId) => client.channels.cache.get(channelId),
-        sessionId,
-        state,
-        event,
-        extra,
-      );
-    });
+    codexMonitor = new CodexLogMonitor(
+      codexBaseDir,
+      (sessionId, state, event, extra) => {
+        void handleCodexMonitorStateChange(
+          (channelId) => client.channels.cache.get(channelId),
+          sessionId,
+          state,
+          event,
+          extra,
+        );
+      },
+      async (providerSessionId, cwd, remoteHumanControl) => {
+        // 快速注册回调（设计文档 7.3 节 + 阶段五）
+        const { registerLocalSession } = await import('./thread-manager.ts');
+        const guild = client.guilds.cache.first();
+        if (!guild) return false;
+
+        const result = await registerLocalSession(
+          {
+            provider: 'codex',
+            providerSessionId,
+            cwd,
+            discoverySource: 'codex-log',
+            labelHint: providerSessionId.slice(0, 12),
+            remoteHumanControl,
+          },
+          guild,
+        );
+
+        if (result?.isNewlyCreated && result.session.remoteHumanControl === false) {
+          void notifyUnmanagedCodexHint({
+            id: result.session.id,
+            channelId: result.session.channelId,
+          });
+        }
+
+        return result !== null;
+      },
+    );
     codexMonitor.start();
     botLog('Codex log monitor started');
+
+    // Start hook server for Claude Code events
+    startHookServer(client);
+    botLog('Hook server started');
+    startHookWatcher(client);
+    botLog('Hook watcher started');
+
+    // Check hook health and send notification if needed
+    const hookHealth = checkHookHealth();
+    logHookHealthStatus(hookHealth);
+    if (!hookHealth.isHealthy || hookHealth.warnings.length > 0) {
+      await sendHookHealthNotification(client, hookHealth, logChannel?.id);
+    }
 
     // Start health monitoring
     if (config.healthReportEnabled) {
       startHealthMonitor(client, botLog);
     }
+
+    // Start panel performance monitoring
+    startPerformanceMonitoring();
+
+    // Gate housekeeping every minute: expire and archive resolved gates
+    gateHousekeepingTimer = setInterval(() => {
+      const expired = gateCoordinator.cleanupExpired();
+      const archived = gateCoordinator.archiveResolved(100);
+      if (expired > 0 || archived > 0) {
+        console.log(`[GateHousekeeping] expired=${expired}, archived=${archived}`);
+      }
+    }, 60_000);
 
     // Presence update every 30s
     setInterval(updatePresence, 30_000);
@@ -403,9 +549,16 @@ export async function startBot(): Promise<void> {
       codexMonitor.stop();
       codexMonitor = null;
     }
+    stopHookServer();
+    stopHookWatcher();
     await flushLogs();
     stopSync();
     stopHealthMonitor();
+    stopPerformanceMonitoring();
+    if (gateHousekeepingTimer) {
+      clearInterval(gateHousekeepingTimer);
+      gateHousekeepingTimer = null;
+    }
     releaseLock();
     client.destroy();
     process.exit(0);

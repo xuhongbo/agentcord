@@ -33,6 +33,7 @@ import {
   initializeSessionPanel,
   updateSessionState,
   handleResultEvent,
+  handleAwaitingHuman,
   queueDigest,
   flushDigest,
 } from './panel-adapter.ts';
@@ -515,11 +516,9 @@ export async function handleOutputStream(
               metadata: { detail: event.questionsJson },
             });
             await flushDigest(sessionId);
-          }
-          const rendered = renderAskUserQuestion(event.questionsJson, sessionId);
-          if (rendered) {
-            rendered.components.push(makeStopButton(sessionId));
-            await channel.send({ embeds: rendered.embeds, components: rendered.components });
+            await handleAwaitingHuman(sessionId, event.questionsJson, {
+              source: session.provider === 'claude' ? 'claude' : 'codex',
+            });
           }
           break;
         }

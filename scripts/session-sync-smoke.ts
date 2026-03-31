@@ -6,6 +6,7 @@ import { getAllRegisteredProjects, loadRegistry } from '../src/project-registry.
 import { loadSessions, getAllSessions } from '../src/thread-manager.ts';
 import { listCodexSessionsForProjects } from '../src/codex-session-discovery.ts';
 import { startSync, stopSync } from '../src/session-sync.ts';
+import { cleanupSessionsById } from '../src/session-housekeeping.ts';
 
 const outDir = join(process.cwd(), 'local-acceptance');
 mkdirSync(outDir, { recursive: true });
@@ -61,12 +62,24 @@ const discoveredCodex = listCodexSessionsForProjects(projects.map((project) => p
 );
 
 const before = getAllSessions().length;
+const beforeChannelIds = new Set(getAllSessions().map((session) => session.channelId));
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 await client.login(config.token);
+const guild = await client.guilds.fetch(config.guildId);
+await guild.channels.fetch();
 startSync(client);
 await new Promise((resolve) => setTimeout(resolve, 5000));
 stopSync();
-const after = getAllSessions().length;
+const sessionsAfterSync = getAllSessions();
+const after = sessionsAfterSync.length;
+const addedSessionIds = sessionsAfterSync
+  .filter((session) => !beforeChannelIds.has(session.channelId))
+  .map((session) => session.id);
+const cleanup = await cleanupSessionsById(
+  guild,
+  addedSessionIds,
+  'threadcord session-sync smoke cleanup',
+);
 client.destroy();
 
 const report = {
@@ -83,6 +96,7 @@ const report = {
   inMemorySessionsBeforeSync: before,
   inMemorySessionsAfterSync: after,
   syncAddedSessions: after - before,
+  cleanup,
 };
 
 writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');

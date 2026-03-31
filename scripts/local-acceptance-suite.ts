@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
@@ -26,7 +26,35 @@ const commands = [
   { name: 'monitor-e2e', cmd: ['node', '--experimental-strip-types', 'scripts/monitor-e2e.ts'] },
 ];
 
-const results: Array<{ name: string; exitCode: number; stdout: string; stderr: string }> = [];
+const results: Array<{
+  name: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  artifactFailure?: string;
+}> = [];
+
+function readMonitorArtifactFailure(): string | undefined {
+  const resultPath = join(outDir, 'monitor-e2e-result.json');
+  if (!existsSync(resultPath)) {
+    return 'monitor-e2e-result.json missing';
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as {
+      runError?: string | null;
+      completion?: string;
+      proofFile?: boolean;
+      proofContent?: string | null;
+    };
+    if (parsed.runError) return `runError: ${parsed.runError}`;
+    if (parsed.completion === '(none)') return 'completion missing';
+    if (parsed.proofFile !== true) return 'proof file missing';
+    if (parsed.proofContent !== 'MONITOR_E2E_OK') return 'proof content mismatch';
+  } catch (err) {
+    return `artifact parse failed: ${(err as Error).message}`;
+  }
+  return undefined;
+}
 
 for (const item of commands) {
   process.stdout.write(`\n=== RUN ${item.name} ===\n`);
@@ -38,11 +66,13 @@ for (const item of commands) {
   });
   process.stdout.write(result.stdout ? `${result.stdout}\n` : '');
   process.stderr.write(result.stderr ? `${result.stderr}\n` : '');
+  const artifactFailure = item.name === 'monitor-e2e' ? readMonitorArtifactFailure() : undefined;
   results.push({
     name: item.name,
-    exitCode: result.exitCode ?? 1,
+    exitCode: artifactFailure ? 1 : result.exitCode ?? 1,
     stdout: result.stdout,
     stderr: result.stderr,
+    artifactFailure,
   });
 }
 

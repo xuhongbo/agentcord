@@ -67,6 +67,38 @@ export type ProviderEvent =
 
 export type ClaudePermissionMode = 'bypass' | 'normal';
 
+export interface ProviderPermissionContext {
+  signal: AbortSignal;
+  suggestions?: any[];
+  blockedPath?: string;
+  decisionReason?: string;
+  title?: string;
+  displayName?: string;
+  description?: string;
+  toolUseID: string;
+  agentID?: string;
+}
+
+export type ProviderPermissionDecision =
+  | {
+      behavior: 'allow';
+      updatedInput?: Record<string, unknown>;
+      updatedPermissions?: any[];
+      toolUseID?: string;
+    }
+  | {
+      behavior: 'deny';
+      message: string;
+      interrupt?: boolean;
+      toolUseID?: string;
+    };
+
+export type ProviderCanUseTool = (
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ProviderPermissionContext,
+) => Promise<ProviderPermissionDecision>;
+
 export interface ProviderSessionOptions {
   directory: string;
   providerSessionId?: string;
@@ -79,6 +111,7 @@ export interface ProviderSessionOptions {
   claudePermissionMode?: ClaudePermissionMode;
   systemPromptParts: string[];
   abortController: AbortController;
+  canUseTool?: ProviderCanUseTool;
 }
 
 export interface Provider {

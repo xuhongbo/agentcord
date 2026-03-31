@@ -13,6 +13,7 @@ import type {
   ProviderName,
 } from './types.ts';
 import { config } from './config.ts';
+import type { ProviderCanUseTool } from './providers/types.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,13 @@ export async function loadSessions(): Promise<void> {
       humanResolved: s.humanResolved ?? false,
       currentInteractionMessageId: s.currentInteractionMessageId,
       statusCardMessageId: s.statusCardMessageId,
+      discoverySource: s.discoverySource ?? 'discord',
+      lastObservedState: s.lastObservedState,
+      lastObservedEventKey: s.lastObservedEventKey,
+      lastObservedAt: s.lastObservedAt,
+      lastObservedCwd: s.lastObservedCwd,
+      remoteHumanControl: s.remoteHumanControl,
+      activeHumanGateId: s.activeHumanGateId,
       isGenerating: false,
     });
     idToChannelId.set(s.id, s.channelId);
@@ -166,6 +174,13 @@ async function persistSessionsNow(): Promise<void> {
       humanResolved: s.humanResolved,
       currentInteractionMessageId: s.currentInteractionMessageId,
       statusCardMessageId: s.statusCardMessageId,
+      discoverySource: s.discoverySource,
+      lastObservedState: s.lastObservedState,
+      lastObservedEventKey: s.lastObservedEventKey,
+      lastObservedAt: s.lastObservedAt,
+      lastObservedCwd: s.lastObservedCwd,
+      remoteHumanControl: s.remoteHumanControl,
+      activeHumanGateId: s.activeHumanGateId,
     });
   }
   await sessionStore.write(data);
@@ -218,6 +233,8 @@ export interface CreateSessionParams {
   subagentDepth?: number;
   mode?: SessionMode;
   claudePermissionMode?: 'bypass' | 'normal';
+  discoverySource?: 'discord' | 'claude-hook' | 'codex-log' | 'sync';
+  remoteHumanControl?: boolean; // 是否为受管会话（阶段五）
 }
 
 export async function createSession(params: CreateSessionParams): Promise<ThreadSession> {
@@ -234,6 +251,8 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     subagentDepth = 0,
     mode = config.defaultMode,
     claudePermissionMode,
+    discoverySource = 'discord',
+    remoteHumanControl,
   } = params;
 
   const resolvedDir = resolvePath(params.directory);
@@ -284,6 +303,8 @@ export async function createSession(params: CreateSessionParams): Promise<Thread
     humanResolved: false,
     currentInteractionMessageId: undefined,
     statusCardMessageId: undefined,
+    discoverySource,
+    remoteHumanControl,
   };
 
   sessions.set(channelId, session);
@@ -312,6 +333,15 @@ export function getSessionByChannel(channelId: string): ThreadSession | undefine
 
 /** Backward-compat alias (subagent sessions are still threads). */
 export const getSessionByThread = getSessionByChannel;
+
+export function getSessionByCodexId(codexSessionId: string): ThreadSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.provider === 'codex' && session.providerSessionId === codexSessionId) {
+      return session;
+    }
+  }
+  return undefined;
+}
 
 export function getSessionByProviderSession(
   provider: ProviderName,
@@ -596,6 +626,9 @@ function buildProviderOptions(
   session: ThreadSession,
   controller: AbortController,
   isMonitor = false,
+  runtimeOverrides: {
+    canUseTool?: ProviderCanUseTool;
+  } = {},
 ): import('./providers/types.ts').ProviderSessionOptions {
   const isAutoMode = session.mode === 'auto';
 
@@ -615,6 +648,7 @@ function buildProviderOptions(
       ? buildMonitorSystemPromptParts(session)
       : buildSystemPromptParts(session),
     abortController: controller,
+    canUseTool: runtimeOverrides.canUseTool,
   };
 }
 
@@ -623,6 +657,9 @@ function buildProviderOptions(
 export async function* sendPrompt(
   sessionId: string,
   prompt: string | ContentBlock[],
+  runtimeOverrides: {
+    canUseTool?: ProviderCanUseTool;
+  } = {},
 ): AsyncGenerator<ProviderEvent> {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
@@ -636,7 +673,7 @@ export async function* sendPrompt(
   const provider = await ensureProvider(session.provider);
 
   try {
-    const stream = provider.sendPrompt(prompt, buildProviderOptions(session, controller));
+    const stream = provider.sendPrompt(prompt, buildProviderOptions(session, controller, false, runtimeOverrides));
 
     for await (const event of stream) {
       if (event.type === 'session_init') {
@@ -665,6 +702,15 @@ export async function* sendPrompt(
 }
 
 export async function* continueSession(sessionId: string): AsyncGenerator<ProviderEvent> {
+  yield* continueSessionWithOverrides(sessionId);
+}
+
+export async function* continueSessionWithOverrides(
+  sessionId: string,
+  runtimeOverrides: {
+    canUseTool?: ProviderCanUseTool;
+  } = {},
+): AsyncGenerator<ProviderEvent> {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
   if (session.isGenerating) throw new Error('Session is already generating');
@@ -677,7 +723,9 @@ export async function* continueSession(sessionId: string): AsyncGenerator<Provid
   const provider = await ensureProvider(session.provider);
 
   try {
-    const stream = provider.continueSession(buildProviderOptions(session, controller));
+    const stream = provider.continueSession(
+      buildProviderOptions(session, controller, false, runtimeOverrides),
+    );
 
     for await (const event of stream) {
       if (event.type === 'session_init') {
@@ -766,4 +814,167 @@ export function consumeAbortReason(sessionId: string): 'user' | 'watchdog' | und
   const reason = sessionAbortReasons.get(session.id);
   sessionAbortReasons.delete(session.id);
   return reason;
+}
+
+// ─── 统一本地会话注册流程 ─────────────────────────────────────────────────────
+
+export interface RegisterLocalSessionParams {
+  provider: ProviderName;
+  providerSessionId: string;
+  cwd: string;
+  discoverySource: 'claude-hook' | 'codex-log' | 'sync';
+  labelHint?: string;
+  remoteHumanControl?: boolean;
+}
+
+export interface RegisterLocalSessionResult {
+  session: ThreadSession;
+  isNewlyCreated: boolean;
+}
+
+interface LocalObservationPatch {
+  discoverySource: 'claude-hook' | 'codex-log' | 'sync';
+  cwd: string;
+  remoteHumanControl?: boolean;
+}
+
+export function updateLocalObservation(
+  sessionId: string,
+  patch: LocalObservationPatch,
+): void {
+  const observationPatch: Partial<ThreadSession> = {
+    discoverySource: patch.discoverySource,
+    lastObservedAt: Date.now(),
+    lastObservedCwd: resolvePath(patch.cwd),
+  };
+
+  if (patch.remoteHumanControl !== undefined) {
+    observationPatch.remoteHumanControl = patch.remoteHumanControl;
+  }
+
+  updateSession(sessionId, observationPatch);
+}
+
+/**
+ * 统一本地会话注册流程（设计文档 7.4 节）
+ *
+ * 1. 解析提供方、会话 ID、cwd
+ * 2. 用 cwd 归属到已挂载项目
+ * 3. 查找是否已有频道与会话
+ * 4. 没有则创建，有则复用
+ * 5. 初始化状态卡绑定
+ *
+ * 幂等性：重复调用不会创建重复会话
+ */
+export async function registerLocalSession(
+  params: RegisterLocalSessionParams,
+  guild: import('discord.js').Guild,
+): Promise<RegisterLocalSessionResult | null> {
+  const { provider, providerSessionId, cwd, discoverySource, labelHint, remoteHumanControl } = params;
+
+  // 1. 检查是否已注册
+  const existing = getSessionByProviderSessionId(provider, providerSessionId);
+  if (existing) {
+    updateLocalObservation(existing.id, {
+      discoverySource,
+      cwd,
+      remoteHumanControl,
+    });
+    return { session: existing, isNewlyCreated: false };
+  }
+
+  // 2. 根据 cwd 归属到已挂载项目
+  const { getProjectByPath, getAllRegisteredProjects } = await import('./project-registry.ts');
+  const { resolvePath } = await import('./utils.ts');
+
+  const normalizedCwd = resolvePath(cwd);
+  let project = getProjectByPath(normalizedCwd);
+
+  // 如果精确匹配失败，尝试找父目录匹配
+  if (!project) {
+    const allProjects = getAllRegisteredProjects();
+    for (const p of allProjects) {
+      const projectPath = resolvePath(p.path);
+      if (normalizedCwd.startsWith(projectPath + sep)) {
+        project = p;
+        break;
+      }
+    }
+  }
+
+  if (!project || !project.discordCategoryId) {
+    console.warn(
+      `[registerLocalSession] Cannot register ${provider} session ${providerSessionId}: ` +
+      `cwd "${cwd}" does not belong to any mounted project`
+    );
+    return null;
+  }
+
+  // 3. 查找或创建 Discord 频道
+  const { ChannelType } = await import('discord.js');
+  const category = guild.channels.cache.get(project.discordCategoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    console.warn(
+      `[registerLocalSession] Cannot register ${provider} session ${providerSessionId}: ` +
+      `category ${project.discordCategoryId} not found`
+    );
+    return null;
+  }
+
+  // 生成频道名称
+  const base = labelHint
+    ? labelHint
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 60)
+    : providerSessionId.slice(0, 12);
+
+  const channelName = `${provider}-${base}`.slice(0, 100);
+
+  // 查找是否已有频道（通过 topic 匹配）
+  let channel = category.children.cache.find(
+    (ch) =>
+      ch.type === ChannelType.GuildText &&
+      typeof ch.topic === 'string' &&
+      ch.topic.includes(`Provider Session: ${providerSessionId}`)
+  );
+
+  // 如果没有，创建新频道
+  if (!channel) {
+    channel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: category.id,
+      topic: `${provider} session (local) | Provider Session: ${providerSessionId}`,
+    });
+  }
+
+  // 4. 创建 ThreadSession
+  const session = await createSession({
+    channelId: channel.id,
+    categoryId: project.discordCategoryId,
+    projectName: project.name,
+    agentLabel: labelHint || providerSessionId.slice(0, 12),
+    provider,
+    providerSessionId,
+    directory: normalizedCwd,
+    type: 'persistent',
+    discoverySource,
+    remoteHumanControl: remoteHumanControl ?? false,
+  });
+
+  updateLocalObservation(session.id, {
+    discoverySource,
+    cwd: normalizedCwd,
+    remoteHumanControl: remoteHumanControl ?? false,
+  });
+
+  console.log(
+    `[registerLocalSession] Registered ${provider} session ${providerSessionId} ` +
+    `(source: ${discoverySource}, channel: ${channel.id})`
+  );
+
+  return { session, isNewlyCreated: true };
 }

@@ -33,6 +33,27 @@ import {
 import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
 import { updateSessionState } from './panel-adapter.ts';
 import { isUserAllowed, truncate } from './utils.ts';
+import { gateCoordinator } from './state/gate-coordinator.ts';
+
+async function resolveAwaitingHumanIfNeeded(sessionId: string): Promise<void> {
+  const session = sessions.getSession(sessionId);
+  if (!session?.currentInteractionMessageId) {
+    return;
+  }
+
+  sessions.updateSession(sessionId, {
+    humanResolved: true,
+    currentInteractionMessageId: undefined,
+  });
+  await updateSessionState(sessionId, {
+    type: 'human_resolved',
+    sessionId,
+    source: session.provider === 'codex' ? 'codex' : 'claude',
+    confidence: 'high',
+    timestamp: Date.now(),
+    metadata: { source: 'answer' },
+  });
+}
 
 export async function handleButton(interaction: ButtonInteraction): Promise<void> {
   if (!isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers)) {
@@ -58,7 +79,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const parts = customId.split(':');
     const sessionId = parts[1];
     const turn = parseInt(parts[2], 10);
-    const action = parts[3];
+    const action = parts[3] as 'approve' | 'deny';
 
     const session = sessions.getSession(sessionId);
     if (!session) {
@@ -66,30 +87,70 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       return;
     }
 
+    // 检查轮次是否匹配
     if (session.currentTurn !== turn) {
-      await interaction.reply({ content: '此请求已过期', ephemeral: true });
+      await interaction.reply({ content: '此请求已过期（轮次不匹配）', ephemeral: true });
       return;
     }
 
+    // 检查消息 ID 是否匹配
+    if (session.currentInteractionMessageId && interaction.message.id !== session.currentInteractionMessageId) {
+      await interaction.reply({ content: '此请求已过期（消息不匹配）', ephemeral: true });
+      return;
+    }
+
+    // 检查是否已被处理
     if (session.humanResolved) {
       await interaction.reply({ content: '已被其他人处理', ephemeral: true });
       return;
     }
 
-    session.humanResolved = true;
+    // 获取当前交互卡对应的活跃门控
+    const activeGate = session.activeHumanGateId
+      ? gateCoordinator.getGate(session.activeHumanGateId)
+      : gateCoordinator.getActiveGateForSession(sessionId);
+    if (!activeGate) {
+      await interaction.reply({ content: '未找到活跃的门控记录', ephemeral: true });
+      return;
+    }
+
+    // 尝试通过 Discord 解决门控（CAS 更新）
+    const result = await gateCoordinator.resolveFromDiscord(
+      activeGate.id,
+      action === 'approve' ? 'approve' : 'reject',
+    );
+
+    if (!result.success) {
+      await interaction.reply({
+        content: `处理失败: ${result.message || '未知错误'}`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // 更新会话状态
     sessions.updateSession(sessionId, {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
 
+    // 更新交互卡
     await interaction.update({
       components: [],
       embeds: interaction.message.embeds.map((e) => ({
         ...e,
-        footer: { text: `${interaction.user.tag} ${action === 'approve' ? '已批准' : '已拒绝'} - ${new Date().toLocaleTimeString()}` },
+        footer: {
+          text: `${interaction.user.tag} ${action === 'approve' ? '已批准' : '已拒绝'} - ${new Date().toLocaleTimeString()}`
+        },
       })),
     });
 
+    if (result.handledByReceipt) {
+      return;
+    }
+
+    // 根据操作继续或停止
     if (action === 'approve') {
       await updateSessionState(sessionId, {
         type: 'human_resolved',
@@ -97,13 +158,16 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         source: session.provider === 'codex' ? 'codex' : 'claude',
         confidence: 'high',
         timestamp: Date.now(),
-        metadata: { action },
+        metadata: { action: 'approve' },
       });
       try {
         const channel = interaction.channel as SessionChannel;
         await executeSessionContinue(session, channel);
       } catch (err: unknown) {
-        await interaction.followUp({ content: `继续会话失败: ${(err as Error).message}`, ephemeral: true });
+        await interaction.followUp({
+          content: `继续会话失败: ${(err as Error).message}`,
+          ephemeral: true
+        });
       }
     } else {
       await updateSessionState(sessionId, {
@@ -112,7 +176,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         source: session.provider === 'codex' ? 'codex' : 'claude',
         confidence: 'high',
         timestamp: Date.now(),
-        metadata: { action },
+        metadata: { action: 'reject' },
       });
       await interaction.followUp({
         content: '已拒绝本轮请求，状态已回落到待命。',
@@ -158,150 +222,48 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     return;
   }
 
-  // Option buttons (numbered choices)
+  // Option buttons (numbered choices) - DEPRECATED: use awaiting_human interaction cards
   if (customId.startsWith('option:')) {
-    const parts = customId.split(':');
-    const sessionId = parts[1];
-    const optionIndex = parseInt(parts[2], 10);
-    const session = sessions.getSession(sessionId);
-    if (!session) {
-      await interaction.reply({ content: 'Session not found.', ephemeral: true });
-      return;
-    }
-    const optionText = `${optionIndex + 1}`;
-    await interaction.deferReply();
-    try {
-      const channel = interaction.channel as SessionChannel;
-      await interaction.editReply(`Selected option ${optionIndex + 1}`);
-      await executeSessionPrompt(session, channel, optionText);
-    } catch (err: unknown) {
-      await interaction.editReply(`Error: ${(err as Error).message}`);
-    }
-    return;
-  }
-
-  // Multi-question: collect an answer without submitting
-  if (customId.startsWith('pick:')) {
-    const parts = customId.split(':');
-    const sessionId = parts[1];
-    const questionIndex = parseInt(parts[2], 10);
-    const answer = parts.slice(3).join(':');
-    const session = sessions.getSession(sessionId);
-    if (!session) {
-      await interaction.reply({ content: 'Session not found.', ephemeral: true });
-      return;
-    }
-    setPendingAnswer(sessionId, questionIndex, answer);
-    const totalQuestions = getQuestionCount(sessionId);
-    const pending = getPendingAnswers(sessionId);
-    const answeredCount = pending?.size || 0;
-
-    try {
-      const original = interaction.message;
-      const updatedComponents: EditableRow[] = original.components.map((row) => {
-        if (!('components' in row)) return row as unknown as EditableRow;
-        const firstComponent = asComponentLike(row.components?.[0]);
-        if (!firstComponent?.customId?.startsWith('pick:')) return row as unknown as EditableRow;
-        const rowQi = parseInt(firstComponent.customId.split(':')[2], 10);
-        if (rowQi !== questionIndex) return row as unknown as EditableRow;
-        const newRow = new ActionRowBuilder<ButtonBuilder>();
-        for (const btn of row.components) {
-          const btnData = asComponentLike(btn);
-          if (!btnData.customId || !btnData.label) continue;
-          const btnAnswer = btnData.customId.split(':').slice(3).join(':');
-          const isSelected = btnAnswer === answer;
-          newRow.addComponents(
-            new ButtonBuilder()
-              .setCustomId(btnData.customId)
-              .setLabel(btnData.label)
-              .setStyle(isSelected ? ButtonStyle.Success : ButtonStyle.Secondary),
-          );
-        }
-        return newRow;
-      });
-      await original.edit({ components: updatedComponents });
-    } catch {
-      /* message may be deleted */
-    }
-
     await interaction.reply({
-      content: `Selected for Q${questionIndex + 1}: **${truncate(answer, 100)}** (${answeredCount}/${totalQuestions} answered)`,
-      ephemeral: true,
+      content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+      ephemeral: true
     });
     return;
   }
 
-  // Multi-question: submit all collected answers
+  // Multi-question: collect an answer without submitting - DEPRECATED
+  if (customId.startsWith('pick:')) {
+    await interaction.reply({
+      content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+      ephemeral: true
+    });
+    return;
+  }
+
+  // Multi-question: submit all collected answers - DEPRECATED
   if (customId.startsWith('submit-answers:')) {
-    const sessionId = customId.slice(15);
-    const session = sessions.getSession(sessionId);
-    if (!session) {
-      await interaction.reply({ content: 'Session not found.', ephemeral: true });
-      return;
-    }
-    const totalQuestions = getQuestionCount(sessionId);
-    const pending = getPendingAnswers(sessionId);
-    if (!pending || pending.size === 0) {
-      await interaction.reply({ content: 'No answers selected yet.', ephemeral: true });
-      return;
-    }
-    const answerLines: string[] = [];
-    for (let i = 0; i < totalQuestions; i++) {
-      answerLines.push(`Q${i + 1}: ${pending.get(i) || '(no answer)'}`);
-    }
-    const combined = answerLines.join('\n');
-    clearPendingAnswers(sessionId);
-    await interaction.deferReply();
-    try {
-      const channel = interaction.channel as SessionChannel;
-      await interaction.editReply(`Submitted answers:\n${combined}`);
-      await executeSessionPrompt(session, channel, combined);
-    } catch (err: unknown) {
-      await interaction.editReply(`Error: ${(err as Error).message}`);
-    }
+    await interaction.reply({
+      content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+      ephemeral: true
+    });
     return;
   }
 
-  // AskUserQuestion answer buttons (single question)
+  // AskUserQuestion answer buttons (single question) - DEPRECATED
   if (customId.startsWith('answer:')) {
-    const parts = customId.split(':');
-    const sessionId = parts[1];
-    const hasQuestionIndex = /^\d+$/.test(parts[2]);
-    const answer = hasQuestionIndex ? parts.slice(3).join(':') : parts.slice(2).join(':');
-    const session = sessions.getSession(sessionId);
-    if (!session) {
-      await interaction.reply({ content: 'Session not found.', ephemeral: true });
-      return;
-    }
-    await interaction.deferReply();
-    try {
-      const channel = interaction.channel as SessionChannel;
-      await interaction.editReply(`Answered: **${truncate(answer, 100)}**`);
-      await executeSessionPrompt(session, channel, answer);
-    } catch (err: unknown) {
-      await interaction.editReply(`Error: ${(err as Error).message}`);
-    }
+    await interaction.reply({
+      content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+      ephemeral: true
+    });
     return;
   }
 
-  // Confirm buttons (yes/no)
+  // Confirm buttons (yes/no) - DEPRECATED
   if (customId.startsWith('confirm:')) {
-    const parts = customId.split(':');
-    const sessionId = parts[1];
-    const answer = parts[2];
-    const session = sessions.getSession(sessionId);
-    if (!session) {
-      await interaction.reply({ content: 'Session not found.', ephemeral: true });
-      return;
-    }
-    await interaction.deferReply();
-    try {
-      const channel = interaction.channel as SessionChannel;
-      await interaction.editReply(`Answered: ${answer}`);
-      await executeSessionPrompt(session, channel, answer);
-    } catch (err: unknown) {
-      await interaction.editReply(`Error: ${(err as Error).message}`);
-    }
+    await interaction.reply({
+      content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+      ephemeral: true
+    });
     return;
   }
 
@@ -412,6 +374,7 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     }
     await interaction.deferReply();
     try {
+      await resolveAwaitingHumanIfNeeded(sessionId);
       const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Answered: **${truncate(selected, 100)}**`);
       await executeSessionPrompt(session, channel, selected);
@@ -431,6 +394,7 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     }
     await interaction.deferReply();
     try {
+      await resolveAwaitingHumanIfNeeded(sessionId);
       const channel = interaction.channel as SessionChannel;
       await interaction.editReply(`Selected: ${truncate(selected, 100)}`);
       await executeSessionPrompt(session, channel, selected);

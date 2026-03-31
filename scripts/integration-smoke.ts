@@ -9,6 +9,7 @@ import {
   type CategoryChannel,
   type ForumChannel,
   type AnyThreadChannel,
+  type Guild,
 } from 'discord.js';
 import { config } from '../src/config.ts';
 import { handleProject, handleAgent, handleSubagent, handleShell } from '../src/command-handlers.ts';
@@ -18,12 +19,16 @@ import {
   getProjectByName,
   registerProject,
   unbindProjectCategory,
+  bindProjectCategory,
+  setProjectHistoryChannel,
+  setProjectControlChannel,
 } from '../src/project-registry.ts';
 import { loadProjects } from '../src/project-manager.ts';
 import { loadSessions, getSession, getSessionsByCategory } from '../src/thread-manager.ts';
 import { loadArchived, getArchivedSessions } from '../src/archive-manager.ts';
 import { CodexLogMonitor } from '../src/monitors/codex-log-monitor.ts';
 import { handleCodexMonitorStateChange } from '../src/codex-monitor-bridge.ts';
+import { cleanupSessionsById } from '../src/session-housekeeping.ts';
 
 type OptionMap = Record<string, string | null | undefined>;
 
@@ -166,6 +171,18 @@ let bootstrapChannel: TextChannel | null = null;
 let tempCategory: CategoryChannel | null = null;
 let cleanupBinding = false;
 let existingControl: TextChannel | null = null;
+let rebindForSmoke = false;
+let guild: Guild | null = null;
+const createdSessionIds = new Set<string>();
+const createdHistoryThreadIds = new Set<string>();
+let originalBinding:
+  | {
+      categoryId?: string;
+      categoryName?: string;
+      historyChannelId?: string;
+      controlChannelId?: string;
+    }
+  | null = null;
 
 try {
   await loadRegistry();
@@ -191,7 +208,7 @@ try {
   await client.login(config.token);
   await waitFor(1000);
 
-  const guild = await client.guilds.fetch(config.guildId);
+  guild = await client.guilds.fetch(config.guildId);
   await guild.channels.fetch();
   step(report, 'discord-login', 'passed', `已连接到 guild ${guild.name}`);
 
@@ -201,8 +218,28 @@ try {
     if (existing?.type === ChannelType.GuildCategory) {
       category = existing as CategoryChannel;
       report.usedExistingBinding = true;
+      originalBinding = {
+        categoryId: mountedProject.discordCategoryId,
+        categoryName: mountedProject.discordCategoryName,
+        historyChannelId: mountedProject.historyChannelId,
+        controlChannelId: mountedProject.controlChannelId,
+      };
       step(report, 'resolve-category', 'passed', `复用已绑定分类 ${category.name}`);
     }
+  }
+
+  if (category && category.children.cache.size >= 50) {
+    step(
+      report,
+      'resolve-category',
+      'skipped',
+      `已绑定分类 ${category.name} 已满 ${category.children.cache.size} 个频道，改用临时分类`,
+    );
+    category = null;
+    report.usedExistingBinding = false;
+    existingControl = null;
+    cleanupBinding = true;
+    rebindForSmoke = true;
   }
 
   if (!category) {
@@ -220,10 +257,11 @@ try {
   report.categoryId = category.id;
 
   existingControl =
-    mountedProject.controlChannelId &&
-    ((await guild.channels.fetch(mountedProject.controlChannelId).catch(() => null)) as
-      | TextChannel
-      | null);
+    report.usedExistingBinding && mountedProject.controlChannelId
+      ? (((await guild.channels.fetch(mountedProject.controlChannelId).catch(() => null)) as
+          | TextChannel
+          | null))
+      : null;
 
   if (existingControl?.type === ChannelType.GuildText) {
     bootstrapChannel = existingControl;
@@ -241,11 +279,26 @@ try {
   const actorId = config.allowedUsers[0] || 'integration-e2e-user';
   const actorTag = 'threadcord-e2e#0001';
 
+  if (rebindForSmoke) {
+    await unbindProjectCategory(projectName);
+    step(report, 'project-rebind', 'passed', '已临时解绑原分类，准备在临时分类执行冒烟');
+  }
+
   if (!report.usedExistingBinding || !existingControl) {
     const interaction = makeInteraction(actorId, actorTag, guild, bootstrapChannel, 'setup', {
       project: projectName,
     });
     await handleProject(interaction);
+    const setupReply = await interaction.fetchReply().catch(() => null);
+    const setupText =
+      typeof setupReply === 'string'
+        ? setupReply
+        : setupReply && typeof setupReply === 'object' && 'content' in setupReply
+          ? String((setupReply as { content?: unknown }).content ?? '')
+          : '';
+    if (/Failed|not under a Category|Run `\/project setup` first/i.test(setupText)) {
+      throw new Error(`project setup failed: ${setupText}`);
+    }
     step(report, 'project-setup', 'passed', `已刷新项目绑定与控制频道 ${projectName}`);
   } else {
     step(report, 'project-setup', 'skipped', '项目已存在 Discord 绑定，跳过重复绑定');
@@ -262,14 +315,18 @@ try {
     mode: 'auto',
   });
   await handleAgent(spawnInteraction);
+  const spawnReply = await spawnInteraction.fetchReply().catch(() => null);
 
   const mainSession = getSessionsByCategory(category.id).find(
     (session) => session.type === 'persistent' && session.agentLabel === mainLabel,
   );
   if (!mainSession) {
-    throw new Error('主会话未创建成功');
+    throw new Error(
+      `主会话未创建成功${spawnReply ? `；spawn reply=${JSON.stringify(spawnReply)}` : ''}`,
+    );
   }
   report.mainSessionChannelId = mainSession.channelId;
+  createdSessionIds.add(mainSession.id);
   step(report, 'agent-spawn', 'passed', `创建主代理会话 ${mainLabel}`);
 
   const mainChannel = (await guild.channels.fetch(mainSession.channelId)) as TextChannel;
@@ -293,6 +350,7 @@ try {
     throw new Error('子代理未创建成功');
   }
   report.subagentThreadId = subagent.channelId;
+  createdSessionIds.add(subagent.id);
   step(report, 'subagent-run', 'passed', `创建子代理线程 ${subLabel}`);
 
   if (!config.shellEnabled) {
@@ -359,6 +417,7 @@ try {
       throw new Error('Codex 冒烟会话未创建成功');
     }
     report.codexSessionChannelId = codexSession.channelId;
+    createdSessionIds.add(codexSession.id);
 
     const codexChannel = (await guild.channels.fetch(codexSession.channelId)) as TextChannel;
     await withTimeout(
@@ -448,6 +507,11 @@ try {
   if (archivedAfter <= archivedBefore) {
     throw new Error('归档记录未增加');
   }
+  for (const archivedRecord of getArchivedSessions(category.id).slice(archivedBefore)) {
+    if (archivedRecord.forumPostId) {
+      createdHistoryThreadIds.add(archivedRecord.forumPostId);
+    }
+  }
   step(report, 'agent-archive', 'passed', '主会话已归档到 #history');
 
   const historyForum = boundProject?.historyChannelId
@@ -469,6 +533,18 @@ try {
   step(report, 'integration', 'failed', message);
 } finally {
   try {
+    if (guild) {
+      await cleanupSessionsById(
+        guild,
+        createdSessionIds,
+        'threadcord integration smoke cleanup',
+      ).catch(() => {});
+
+      for (const threadId of createdHistoryThreadIds) {
+        const thread = await guild.channels.fetch(threadId).catch(() => null);
+        await thread?.delete('threadcord integration smoke cleanup').catch(() => {});
+      }
+    }
     if (bootstrapChannel && !existingControl) {
       await bootstrapChannel.delete('threadcord integration smoke cleanup').catch(() => {});
     }
@@ -479,7 +555,25 @@ try {
       await tempCategory.delete('threadcord integration smoke cleanup').catch(() => {});
     }
     if (cleanupBinding) {
-      await unbindProjectCategory(projectName).catch(() => {});
+      if (originalBinding?.categoryId) {
+        await bindProjectCategory(
+          projectName,
+          originalBinding.categoryId,
+          originalBinding.categoryName,
+        ).catch(() => {});
+        if (originalBinding.historyChannelId) {
+          await setProjectHistoryChannel(projectName, originalBinding.historyChannelId).catch(
+            () => {},
+          );
+        }
+        if (originalBinding.controlChannelId) {
+          await setProjectControlChannel(projectName, originalBinding.controlChannelId).catch(
+            () => {},
+          );
+        }
+      } else {
+        await unbindProjectCategory(projectName).catch(() => {});
+      }
     }
   } finally {
     if (client) {

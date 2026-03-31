@@ -1,3 +1,12 @@
+// 本地会话补漏层（设计文档阶段二：已降级为补漏层）
+//
+// 职责：
+// - 兜底发现钩子失败或日志监控遗漏的会话
+// - 定期对账，确保所有本地会话都已注册
+// - 优先级低于 Claude 钩子和 Codex 日志监控
+//
+// 轮询间隔：30 秒（可通过 SESSION_SYNC_INTERVAL_MS 配置）
+
 import type { Client, Guild, TextChannel, CategoryChannel } from 'discord.js';
 import { ChannelType } from 'discord.js';
 import { listCodexSessionsForProjects } from './codex-session-discovery.ts';
@@ -88,6 +97,7 @@ async function syncPersistentSession(
     providerSessionId,
     directory,
     type: 'persistent',
+    discoverySource: 'sync',
   });
 }
 

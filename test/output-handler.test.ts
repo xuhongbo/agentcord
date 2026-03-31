@@ -119,7 +119,7 @@ describe('handleOutputStream', () => {
     expect(String(call?.[2]).includes('B'.repeat(200))).toBe(true);
   });
 
-  it('ask_user 只发送问题卡，不追加允许继续/拒绝卡', async () => {
+  it('ask_user 通过统一交互入口处理等待人工', async () => {
     const channel = createFakeChannel();
 
     await handleOutputStream(
@@ -135,12 +135,15 @@ describe('handleOutputStream', () => {
       'session-2',
     );
 
-    expect(channel.sent.length).toBe(1);
     expect(mocks.updateSessionState).toHaveBeenCalledWith(
       'session-2',
       expect.objectContaining({ type: 'awaiting_human' }),
     );
-    expect(mocks.handleAwaitingHuman).not.toHaveBeenCalled();
+    expect(mocks.handleAwaitingHuman).toHaveBeenCalledWith(
+      'session-2',
+      expect.any(String),
+      expect.objectContaining({ source: 'codex' }),
+    );
     expect(mocks.updateSession).not.toHaveBeenCalled();
   });
 

@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getSession = vi.fn();
 const updateSession = vi.fn();
 const executeSessionContinue = vi.fn();
+const executeSessionPrompt = vi.fn();
 const updateSessionState = vi.fn();
+const getGate = vi.fn();
+const getActiveGateForSession = vi.fn();
+const resolveFromDiscord = vi.fn();
 
 vi.mock('../src/config.ts', () => ({
   config: {
@@ -35,11 +39,19 @@ vi.mock('../src/output-handler.ts', () => ({
 
 vi.mock('../src/session-executor.ts', () => ({
   executeSessionContinue,
-  executeSessionPrompt: vi.fn(),
+  executeSessionPrompt,
 }));
 
 vi.mock('../src/panel-adapter.ts', () => ({
   updateSessionState,
+}));
+
+vi.mock('../src/state/gate-coordinator.ts', () => ({
+  gateCoordinator: {
+    getGate,
+    getActiveGateForSession,
+    resolveFromDiscord,
+  },
 }));
 
 const { handleButton } = await import('../src/button-handler.ts');
@@ -49,7 +61,7 @@ function createInteraction(customId: string) {
     customId,
     user: { id: 'u1', tag: 'tester#1000' },
     channel: { id: 'c1', send: vi.fn(), messages: {} },
-    message: { embeds: [{ title: '等待人工处理' }] },
+    message: { id: 'msg-active', embeds: [{ title: '等待人工处理' }] },
     reply: vi.fn(async () => undefined),
     update: vi.fn(async () => undefined),
     followUp: vi.fn(async () => undefined),
@@ -66,7 +78,12 @@ describe('button-handler awaiting_human', () => {
       currentTurn: 2,
       humanResolved: false,
       provider: 'codex',
+      activeHumanGateId: 'gate-1',
+      currentInteractionMessageId: 'msg-active',
     });
+    getGate.mockReturnValue({ id: 'gate-1', status: 'pending' });
+    getActiveGateForSession.mockReturnValue(undefined);
+    resolveFromDiscord.mockResolvedValue({ success: true });
   });
 
   it('approve 会清理交互状态、同步状态并继续会话', async () => {
@@ -77,6 +94,7 @@ describe('button-handler awaiting_human', () => {
     expect(updateSession).toHaveBeenCalledWith('s1', {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
     expect(updateSessionState).toHaveBeenCalledWith(
       's1',
@@ -93,6 +111,7 @@ describe('button-handler awaiting_human', () => {
     expect(updateSession).toHaveBeenCalledWith('s1', {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
     expect(updateSessionState).toHaveBeenCalledWith(
       's1',
@@ -102,5 +121,34 @@ describe('button-handler awaiting_human', () => {
     expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({ ephemeral: true }),
     );
+  });
+
+  it('当前消息不是有效交互消息时拒绝处理', async () => {
+    const interaction = createInteraction('awaiting_human:s1:2:approve');
+    interaction.message.id = 'msg-stale';
+
+    await handleButton(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '此请求已过期（消息不匹配）', ephemeral: true }),
+    );
+    expect(executeSessionContinue).not.toHaveBeenCalled();
+    expect(updateSessionState).not.toHaveBeenCalled();
+  });
+
+  it('旧问题卡按钮已废弃，返回提示', async () => {
+    const interaction = createInteraction('answer:s1:0:Yes');
+
+    await handleButton(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
+        ephemeral: true,
+      }),
+    );
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(updateSessionState).not.toHaveBeenCalled();
+    expect(executeSessionPrompt).not.toHaveBeenCalled();
   });
 });

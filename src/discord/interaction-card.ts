@@ -18,19 +18,16 @@ export class InteractionCard {
     this.channel = channel;
   }
 
-  async show(sessionId: string, turn: number, detail: string): Promise<string> {
+  async show(
+    sessionId: string,
+    turn: number,
+    detail: string,
+    options: {
+      remoteHumanControl?: boolean;
+      provider?: 'claude' | 'codex';
+    } = {},
+  ): Promise<string> {
     const customIdBase = `awaiting_human:${sessionId}:${turn}`;
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`${customIdBase}:approve`)
-        .setLabel('允许继续')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`${customIdBase}:deny`)
-        .setLabel('拒绝')
-        .setStyle(ButtonStyle.Danger),
-    );
 
     const embed = new EmbedBuilder()
       .setTitle('⏸️ 等待人工处理')
@@ -38,8 +35,31 @@ export class InteractionCard {
       .setColor(0xffaa00)
       .setTimestamp();
 
+    let components: ActionRowBuilder<ButtonBuilder>[] = [];
+
+    // 受管会话：显示可用的允许/拒绝按钮
+    if (options.remoteHumanControl !== false) {
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${customIdBase}:approve`)
+          .setLabel('允许继续')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`${customIdBase}:deny`)
+          .setLabel('拒绝')
+          .setStyle(ButtonStyle.Danger),
+      );
+      components = [row];
+    } else {
+      // 非受管会话：显示提示信息
+      embed.addFields({
+        name: '⚠️ 远程审批不可用',
+        value: '此会话不支持远程审批，请在终端处理',
+      });
+    }
+
     await this.hide();
-    const message = await this.channel.send({ embeds: [embed], components: [row] });
+    const message = await this.channel.send({ embeds: [embed], components });
     this.messageId = message.id;
     return message.id;
   }
