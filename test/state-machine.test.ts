@@ -1,7 +1,7 @@
 // 统一状态机单元测试
 // 验证三层状态模型的转换规则、幂等性和非法转换拒绝
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StateMachine } from '../src/state/state-machine.js';
 import type {
   SessionLifecycle,
@@ -229,5 +229,54 @@ describe('StateMachine - 三层状态模型', () => {
       expect(history.length).toBe(0);
     });
   });
-});
 
+  describe('applyPlatformEvent - session_idle 定时器保护', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('应忽略延迟触发且已过期的 session_idle 定时器事件', () => {
+      const sessionId = 'session-stale-idle';
+      const baseEvent = {
+        sessionId,
+        source: 'codex' as const,
+        confidence: 'high' as const,
+      };
+
+      sm.applyPlatformEvent({ ...baseEvent, type: 'session_started', timestamp: Date.now() });
+      sm.incrementTurn(sessionId);
+      sm.applyPlatformEvent({ ...baseEvent, type: 'completed', timestamp: Date.now() });
+
+      sm.incrementTurn(sessionId);
+      sm.applyPlatformEvent({ ...baseEvent, type: 'session_ended', timestamp: Date.now() });
+
+      vi.advanceTimersByTime(3000);
+
+      const latest = sm.getSession(sessionId);
+      expect(latest?.state).toBe('offline');
+      expect(latest?.turn).toBe(3);
+    });
+
+    it('应在会话仍为 completed 时接受当前定时器的 session_idle 事件', () => {
+      const sessionId = 'session-valid-idle';
+      const baseEvent = {
+        sessionId,
+        source: 'codex' as const,
+        confidence: 'high' as const,
+      };
+
+      sm.applyPlatformEvent({ ...baseEvent, type: 'session_started', timestamp: Date.now() });
+      sm.applyPlatformEvent({ ...baseEvent, type: 'completed', timestamp: Date.now() });
+
+      vi.advanceTimersByTime(3000);
+
+      const latest = sm.getSession(sessionId);
+      expect(latest?.state).toBe('idle');
+      expect(latest?.isCompleted).toBe(false);
+    });
+  });
+});

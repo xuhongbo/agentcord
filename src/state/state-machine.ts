@@ -70,6 +70,7 @@ export class StateMachine {
   private legacySessions = new Map<string, SessionStateSnapshot>();
   private transitionHistory = new Map<string, StateTransition[]>();
   private completedTimers = new Map<string, NodeJS.Timeout>();
+  private completedTimerTokens = new Map<string, number>();
 
   /**
    * 获取会话状态，如果不存在则创建默认状态
@@ -270,6 +271,10 @@ export class StateMachine {
     const mappedState = PLATFORM_EVENT_TO_STATE[event.type];
     const current = this.ensureSession(event.sessionId);
 
+    if (event.type === 'session_idle' && !this.isValidIdleEvent(event, current)) {
+      return current;
+    }
+
     if (!mappedState) return current;
 
     const allowTransition =
@@ -316,6 +321,9 @@ export class StateMachine {
         clearTimeout(existingTimer);
       }
 
+      const nextTimerToken = (this.completedTimerTokens.get(event.sessionId) ?? 0) + 1;
+      this.completedTimerTokens.set(event.sessionId, nextTimerToken);
+
       const timer = setTimeout(() => {
         this.applyPlatformEvent({
           type: 'session_idle',
@@ -324,7 +332,7 @@ export class StateMachine {
           stateSource: 'formal',
           confidence: 'high',
           timestamp: Date.now(),
-          metadata: { phase: '待命' },
+          metadata: { phase: '待命', timerToken: nextTimerToken },
         });
         this.completedTimers.delete(event.sessionId);
       }, 3000);
@@ -348,6 +356,21 @@ export class StateMachine {
       clearTimeout(completedTimer);
       this.completedTimers.delete(sessionId);
     }
+    this.completedTimerTokens.delete(sessionId);
+  }
+
+  private isValidIdleEvent(event: PlatformEvent, current: SessionStateSnapshot): boolean {
+    if (current.state !== 'completed') {
+      return false;
+    }
+
+    const eventToken = Number(event.metadata?.timerToken);
+    if (!Number.isFinite(eventToken)) {
+      return true;
+    }
+
+    const latestToken = this.completedTimerTokens.get(event.sessionId);
+    return latestToken === eventToken;
   }
 
   private createDefaultState(): StateMachineState {
