@@ -2,6 +2,15 @@
 
 > **大前提：** agentcord 的目标形态是全局安装的命令行工具（`npm install -g agentcord`），以后台常驻服务运行。本计划实现核心差异化能力 — 用户在终端用 `claude` 或 `codex` 命令创建的会话自动出现在 Discord 中，实现"本地编码、远程可见"的体验。
 
+> **状态更新（2026-03-31）：方案已演化。**
+>
+> 本地会话同步能力已经落地，但实现细节相较本计划有两点演化：
+>
+> - 当前代码使用持久会话模型来承接同步结果，而不是保留一套单独的“同步会话”抽象
+> - 当前只同步已经完成 Discord 项目绑定的已挂载项目；也就是项目不仅要本地注册，还要有已绑定的 Discord 分类
+>
+> 因而，这份计划可继续作为“发现与过滤策略”的历史说明，但不能再视为当前实现的逐行蓝图。
+
 **Goal:** 自动发现本地 CLI 创建的 Claude/Codex 会话，在对应项目的 Discord 分类下创建频道，支持通过 Discord 消息 resume 对话
 
 **Architecture:** 新增 `session-sync.ts` 模块，在 bot 启动后以 30s 间隔轮询。Claude 通过 SDK `listSessions({ dir })` API 发现；Codex 通过读取 `session_index.jsonl` 拿到候选会话，再按 `id` 在 `sessions/**/*.jsonl` 中定位真实会话文件，读取首条 `session_meta.payload.cwd`，仅同步 `cwd` 位于已挂载项目根目录之下的会话。发现新会话后在 Discord 创建频道并注册到 `sessions.json`。第一阶段不同步历史消息。

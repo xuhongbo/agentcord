@@ -5,6 +5,7 @@ import * as sessions from './thread-manager.ts';
 import { handleOutputStream } from './output-handler.ts';
 import {
   handleResultEvent,
+  handleAwaitingHuman,
   queueDigest,
   updateSessionState,
 } from './panel-adapter.ts';
@@ -820,6 +821,10 @@ async function resolveAskUserIfPossible(
   );
 
   if (decision.shouldAskHuman) {
+    const detail =
+      workerResult.askUserQuestionsJson ||
+      decision.rationale ||
+      'The worker hit a real non-obvious decision point.';
     applyWorkflowHook(session, 'on_human_question', {
       status: 'awaiting_human',
       iteration,
@@ -827,6 +832,9 @@ async function resolveAskUserIfPossible(
         decision.rationale || 'The worker hit a real non-obvious decision point.',
     });
     await updatePanelState(session, 'awaiting_human', channel);
+    await handleAwaitingHuman(session.id, detail, {
+      source: session.provider === 'codex' ? 'codex' : 'claude',
+    });
     return { handled: false };
   }
 
@@ -969,6 +977,9 @@ async function runMonitorLoop(
       const blocker = decision.rationale || 'The monitor reported a blocker.';
       await handleResultEvent(currentSession.id, createSyntheticResult(false, blocker), blocker);
       await updatePanelState(currentSession, 'awaiting_human', channel);
+      await handleAwaitingHuman(currentSession.id, blocker, {
+        source: currentSession.provider === 'codex' ? 'codex' : 'claude',
+      });
       return;
     }
 
@@ -1018,6 +1029,9 @@ async function runMonitorLoop(
     limitSummary,
   );
   await updatePanelState(currentSession, 'awaiting_human', channel);
+  await handleAwaitingHuman(currentSession.id, limitSummary, {
+    source: currentSession.provider === 'codex' ? 'codex' : 'claude',
+  });
 }
 
 export async function executeSessionPrompt(
@@ -1086,6 +1100,9 @@ export async function executeSessionContinue(
       'Monitor mode is enabled but no monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.';
     await handleResultEvent(liveSession.id, createSyntheticResult(false, summary), summary);
     await updatePanelState(liveSession, 'awaiting_human', channel);
+    await handleAwaitingHuman(liveSession.id, summary, {
+      source: liveSession.provider === 'codex' ? 'codex' : 'claude',
+    });
     return;
   }
   const nextProofContract = liveSession.workflowState.nextProofContract;

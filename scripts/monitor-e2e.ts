@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as sessions from '../src/thread-manager.ts';
 import { executeSessionPrompt } from '../src/session-executor.ts';
@@ -61,6 +61,7 @@ const channel = {
 const prompt =
   'Create a file named monitor-proof.txt in the current working directory containing exactly MONITOR_E2E_OK, then explain what you created.';
 let runError: string | null = null;
+let exitCode = 0;
 
 try {
   await Promise.race([
@@ -91,21 +92,34 @@ try {
   process.stdout.write(`\n=== MONITOR E2E SUMMARY ===\n${JSON.stringify(result, null, 2)}\n`);
 } catch (err: unknown) {
   runError = (err as Error).message || 'unknown error';
+  exitCode = 1;
 } finally {
+  const proofPath = join(baseDir, 'monitor-proof.txt');
+  const proofContent = existsSync(proofPath) ? readFileSync(proofPath, 'utf-8').trim() : null;
   const finalResult = {
     sessionId: session.id,
     baseDir,
     files: readdirSync(baseDir),
     monitorPasses: sentMessages.filter((msg) => msg.includes('Monitor: pass')).length,
     completion: sentMessages.find((msg) => msg.includes('completion bar met')) || '(none)',
+    proofFile: existsSync(proofPath),
+    proofContent,
     runError,
     messages: sentMessages.slice(-30),
   };
+  if (
+    runError ||
+    finalResult.completion === '(none)' ||
+    !finalResult.proofFile ||
+    finalResult.proofContent !== 'MONITOR_E2E_OK'
+  ) {
+    exitCode = 1;
+  }
   writeFileSync(
     join(process.cwd(), 'local-acceptance', 'monitor-e2e-result.json'),
     JSON.stringify(finalResult, null, 2),
     'utf-8',
   );
   await sessions.endSession(session.id).catch(() => {});
-  process.exit(0);
+  process.exit(exitCode);
 }

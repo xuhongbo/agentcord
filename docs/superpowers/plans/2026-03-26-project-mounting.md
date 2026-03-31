@@ -2,6 +2,17 @@
 
 > **大前提：** agentcord 的目标形态是全局安装的命令行工具（`npm install -g agentcord`），以后台常驻服务运行。本计划实现显式项目挂载机制 — 用户在任意项目目录下执行 `agentcord project init` 将其注册为受管项目。
 
+> **状态更新（2026-03-31）：方案已演化。**
+>
+> 这份计划保留为历史设计记录，不再等同于当前产品表面。
+>
+> 当前落地方案与本计划的主要差异：
+>
+> - 命令名已从 `agentcord` 演化为 `threadcord`
+> - Discord 侧的主控制面不再围绕旧“会话命令族”展开，而是以 `/project setup` 绑定项目、以 `/agent spawn` 创建主代理会话为主
+> - 本计划中的 Discord `/project list` 没有继续落地；当前以 Discord 分类结构表达项目归属，以本地 `threadcord project list` 查看完整挂载信息
+> - 因此，阅读本文件时应把它理解为“项目挂载边界的来源说明”，而不是“当前命令面逐项实现清单”
+
 **Goal:** 实现显式项目挂载机制，用户在本地目录执行 `agentcord project init` 注册项目，Discord Category 懒创建
 
 **Architecture:** 新增 project-registry.ts 管理全局项目注册表（使用 Plan 1 迁移后的 Store 类，存储在 ~/.agentcord/projects.json），新增 project-cli.ts 处理 CLI 命令，修改 project-manager.ts 从注册表读取而非自动推导。project init 只做本地注册，Discord Category 在 bot 启动或首次创建会话时懒创建。该注册表同时是本地会话同步的项目边界来源：Codex 仅同步 `session_meta.payload.cwd` 位于已挂载项目根目录之下的会话。
@@ -181,6 +192,8 @@ git commit -m "refactor: project-manager reads from global registry, lazy-create
 ```
 
 ### Task 4: 新增 Discord /project list 命令
+
+> **演化说明：** 这一任务已被放弃。当前产品没有补做 Discord `/project list`，因为 Discord 分类本身已经天然表达项目结构；如需完整挂载信息，使用本地 `threadcord project list`。
 
 **Files:**
 

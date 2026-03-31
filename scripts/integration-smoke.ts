@@ -18,6 +18,9 @@ import {
   getProjectByName,
   registerProject,
   unbindProjectCategory,
+  bindProjectCategory,
+  setProjectHistoryChannel,
+  setProjectControlChannel,
 } from '../src/project-registry.ts';
 import { loadProjects } from '../src/project-manager.ts';
 import { loadSessions, getSession, getSessionsByCategory } from '../src/thread-manager.ts';
@@ -166,6 +169,15 @@ let bootstrapChannel: TextChannel | null = null;
 let tempCategory: CategoryChannel | null = null;
 let cleanupBinding = false;
 let existingControl: TextChannel | null = null;
+let rebindForSmoke = false;
+let originalBinding:
+  | {
+      categoryId?: string;
+      categoryName?: string;
+      historyChannelId?: string;
+      controlChannelId?: string;
+    }
+  | null = null;
 
 try {
   await loadRegistry();
@@ -201,8 +213,28 @@ try {
     if (existing?.type === ChannelType.GuildCategory) {
       category = existing as CategoryChannel;
       report.usedExistingBinding = true;
+      originalBinding = {
+        categoryId: mountedProject.discordCategoryId,
+        categoryName: mountedProject.discordCategoryName,
+        historyChannelId: mountedProject.historyChannelId,
+        controlChannelId: mountedProject.controlChannelId,
+      };
       step(report, 'resolve-category', 'passed', `复用已绑定分类 ${category.name}`);
     }
+  }
+
+  if (category && category.children.cache.size >= 50) {
+    step(
+      report,
+      'resolve-category',
+      'skipped',
+      `已绑定分类 ${category.name} 已满 ${category.children.cache.size} 个频道，改用临时分类`,
+    );
+    category = null;
+    report.usedExistingBinding = false;
+    existingControl = null;
+    cleanupBinding = true;
+    rebindForSmoke = true;
   }
 
   if (!category) {
@@ -220,10 +252,11 @@ try {
   report.categoryId = category.id;
 
   existingControl =
-    mountedProject.controlChannelId &&
-    ((await guild.channels.fetch(mountedProject.controlChannelId).catch(() => null)) as
-      | TextChannel
-      | null);
+    report.usedExistingBinding && mountedProject.controlChannelId
+      ? (((await guild.channels.fetch(mountedProject.controlChannelId).catch(() => null)) as
+          | TextChannel
+          | null))
+      : null;
 
   if (existingControl?.type === ChannelType.GuildText) {
     bootstrapChannel = existingControl;
@@ -241,11 +274,26 @@ try {
   const actorId = config.allowedUsers[0] || 'integration-e2e-user';
   const actorTag = 'threadcord-e2e#0001';
 
+  if (rebindForSmoke) {
+    await unbindProjectCategory(projectName);
+    step(report, 'project-rebind', 'passed', '已临时解绑原分类，准备在临时分类执行冒烟');
+  }
+
   if (!report.usedExistingBinding || !existingControl) {
     const interaction = makeInteraction(actorId, actorTag, guild, bootstrapChannel, 'setup', {
       project: projectName,
     });
     await handleProject(interaction);
+    const setupReply = await interaction.fetchReply().catch(() => null);
+    const setupText =
+      typeof setupReply === 'string'
+        ? setupReply
+        : setupReply && typeof setupReply === 'object' && 'content' in setupReply
+          ? String((setupReply as { content?: unknown }).content ?? '')
+          : '';
+    if (/Failed|not under a Category|Run `\/project setup` first/i.test(setupText)) {
+      throw new Error(`project setup failed: ${setupText}`);
+    }
     step(report, 'project-setup', 'passed', `已刷新项目绑定与控制频道 ${projectName}`);
   } else {
     step(report, 'project-setup', 'skipped', '项目已存在 Discord 绑定，跳过重复绑定');
@@ -262,12 +310,15 @@ try {
     mode: 'auto',
   });
   await handleAgent(spawnInteraction);
+  const spawnReply = await spawnInteraction.fetchReply().catch(() => null);
 
   const mainSession = getSessionsByCategory(category.id).find(
     (session) => session.type === 'persistent' && session.agentLabel === mainLabel,
   );
   if (!mainSession) {
-    throw new Error('主会话未创建成功');
+    throw new Error(
+      `主会话未创建成功${spawnReply ? `；spawn reply=${JSON.stringify(spawnReply)}` : ''}`,
+    );
   }
   report.mainSessionChannelId = mainSession.channelId;
   step(report, 'agent-spawn', 'passed', `创建主代理会话 ${mainLabel}`);
@@ -479,7 +530,25 @@ try {
       await tempCategory.delete('threadcord integration smoke cleanup').catch(() => {});
     }
     if (cleanupBinding) {
-      await unbindProjectCategory(projectName).catch(() => {});
+      if (originalBinding?.categoryId) {
+        await bindProjectCategory(
+          projectName,
+          originalBinding.categoryId,
+          originalBinding.categoryName,
+        ).catch(() => {});
+        if (originalBinding.historyChannelId) {
+          await setProjectHistoryChannel(projectName, originalBinding.historyChannelId).catch(
+            () => {},
+          );
+        }
+        if (originalBinding.controlChannelId) {
+          await setProjectControlChannel(projectName, originalBinding.controlChannelId).catch(
+            () => {},
+          );
+        }
+      } else {
+        await unbindProjectCategory(projectName).catch(() => {});
+      }
     }
   } finally {
     if (client) {

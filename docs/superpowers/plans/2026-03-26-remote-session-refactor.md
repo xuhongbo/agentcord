@@ -2,6 +2,19 @@
 
 > **大前提：** agentcord 的目标形态是全局安装的命令行工具（`npm install -g agentcord`），以后台常驻服务运行。本计划将 Discord 端的会话创建从"指定任意目录"改为"选择已挂载项目"，确保所有远程会话都归属于用户显式注册的项目。
 
+> **状态更新（2026-03-31）：方案已演化。**
+>
+> 这份计划描述的是一版中间态：在保留 `/session new` / `/session resume` 语义的前提下，把目录选择改成项目选择。
+>
+> 当前实际落地方案进一步前移了控制面：
+>
+> - 命令名已从 `agentcord` 演化为 `threadcord`
+> - Discord 侧先用 `/project setup` 把当前分类绑定到已挂载项目
+> - 后续远程创建主代理会话改为 `/agent spawn`
+> - “所有远程会话都必须归属于已挂载项目”这一核心约束仍然保留，但它不再通过旧 `/session new` 交互表面体现
+>
+> 因此，本文件应视为“约束来源的历史计划”，不是当前命令设计的逐字实现说明。
+
 **Goal:** 重构 Discord `/session new` 命令，从"指定目录自动推导项目"改为"必须选择已挂载项目"
 
 **Architecture:** `/session new` 的 `directory` 参数替换为 `project` 参数（autocomplete 从注册表读取），会话创建时从项目注册表获取目录和 Category，移除 `projectNameFromDir` 和 `ensureProjectCategory` 中的自动创建逻辑。这样远程新建会话与本地同步会话都共享同一套“已挂载项目边界”语义。

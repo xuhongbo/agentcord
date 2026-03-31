@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const statusInitialize = vi.fn();
-const statusUpdate = vi.fn();
+const statusInitialize = vi.fn(async () => undefined);
+const statusUpdate = vi.fn(async () => undefined);
 const statusGetMessageId = vi.fn(() => 'status-1');
-const statusAdopt = vi.fn();
+const statusAdopt = vi.fn(async () => undefined);
 const sendTurnSummary = vi.fn();
 const sendTurnFailure = vi.fn();
 const sendEndingSummary = vi.fn();
@@ -69,6 +69,10 @@ describe('panel-adapter', () => {
       humanResolved: false,
       statusCardMessageId: undefined,
     }));
+    statusAdopt.mockResolvedValue(undefined);
+    statusInitialize.mockResolvedValue(undefined);
+    statusUpdate.mockResolvedValue(undefined);
+    statusGetMessageId.mockReturnValue('status-1');
   });
 
   it('失败结果使用失败总结并保留当前轮次', async () => {
@@ -99,4 +103,18 @@ describe('panel-adapter', () => {
       expect.objectContaining({ currentTurn: 4 }),
     );
   });
+
+  it('会接管旧状态卡消息并保持绑定', async () => {
+    const channel = createChannel();
+    await initializeSessionPanel('session-adopt', channel as never, {
+      statusCardMessageId: 'legacy-msg',
+    });
+
+    expect(statusAdopt).toHaveBeenCalledWith('legacy-msg');
+    expect(statusInitialize).toHaveBeenCalled();
+    expect(setStatusCardBinding).toHaveBeenCalledWith('session-adopt', {
+      messageId: 'status-1',
+    });
+  });
+
 });

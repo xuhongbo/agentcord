@@ -16,6 +16,7 @@ export function _setDataDirForTest(dir: string | null): void {
 
 export class Store<T> {
   private readonly filename: string;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(filename: string) {
     this.filename = filename;
@@ -35,14 +36,18 @@ export class Store<T> {
   }
 
   async write(data: T): Promise<void> {
-    const filePath = this.filePath;
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
+    const nextWrite = this.writeQueue.catch(() => {}).then(async () => {
+      const filePath = this.filePath;
+      const dir = dirname(filePath);
+      if (!existsSync(dir)) {
+        await mkdir(dir, { recursive: true });
+      }
 
-    const tmpPath = filePath + '.tmp';
-    await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-    await rename(tmpPath, filePath);
+      const tmpPath = filePath + '.tmp';
+      await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      await rename(tmpPath, filePath);
+    });
+    this.writeQueue = nextWrite;
+    await nextWrite;
   }
 }

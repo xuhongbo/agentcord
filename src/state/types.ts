@@ -63,7 +63,7 @@ export const STATE_COLORS: Record<UnifiedState, number> = {
 
 export interface SessionStateSnapshot {
   state: UnifiedState;
-  source: 'formal' | 'inferred';
+  stateSource: 'formal' | 'inferred';
   confidence: 'high' | 'medium' | 'low';
   updatedAt: number;
   turn: number;
@@ -79,6 +79,7 @@ export interface PlatformEvent {
   type: PlatformEventType;
   sessionId: string;
   source: 'claude' | 'codex';
+  stateSource?: 'formal' | 'inferred';
   confidence: 'high' | 'medium' | 'low';
   metadata?: Record<string, unknown>;
   timestamp: number;

@@ -30,6 +30,7 @@ export function normalizeClaudeEvent(
     type: platformType,
     sessionId,
     source: 'claude',
+    stateSource: 'formal',
     confidence: 'high',
     metadata: event,
     timestamp: Date.now(),
@@ -55,17 +56,23 @@ export function normalizeCodexEvent(
 ): PlatformEvent | null {
   const byEvent = mapCodexToPlatformType(eventKey);
   const byState = mapCodexStateToPlatformType(extra.observedState);
-  const platformType = byState ?? byEvent;
+  const preferStateOverride = extra.observedState === 'codex-permission';
+  const platformType = preferStateOverride
+    ? byState ?? byEvent
+    : byEvent ?? byState;
   if (!platformType) return null;
+
+  const isPermissionEvent =
+    eventKey === 'codex-permission' || extra.observedState === 'codex-permission';
+  const inferredFromState = Boolean(byState && !byEvent);
+  const stateSource = isPermissionEvent || inferredFromState ? 'inferred' : 'formal';
 
   return {
     type: platformType,
     sessionId,
     source: 'codex',
-    confidence:
-      eventKey === 'codex-permission' || extra.observedState === 'codex-permission'
-        ? 'medium'
-        : 'high',
+    stateSource,
+    confidence: isPermissionEvent ? 'medium' : 'high',
     metadata: { eventKey, ...extra },
     timestamp: Date.now(),
   };
@@ -128,13 +135,13 @@ export function toPlatformEvent(
       ...event,
       sessionId: event.sessionId || sessionId,
       source: event.source || source,
+      stateSource: event.stateSource ?? 'formal',
       timestamp: event.timestamp || Date.now(),
     };
   }
 
   if (source === 'codex') {
-    // 当前 provider 事件流仍以 Claude 风格事件名为主，先复用同一映射。
-    return normalizeClaudeEvent(event, sessionId);
+    return null;
   }
   return normalizeClaudeEvent(event, sessionId);
 }
