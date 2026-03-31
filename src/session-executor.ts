@@ -9,14 +9,16 @@ import {
   queueDigest,
   updateSessionState,
 } from './panel-adapter.ts';
+import { gateCoordinator } from './state/gate-coordinator.ts';
 import { isAbortError, truncate } from './utils.ts';
+import { config } from './config.ts';
 import type {
   ThreadSession as Session,
   SessionMonitorFeedbackReport,
   SessionNextProofContract,
   SessionWorkerProgressReport,
 } from './types.ts';
-import type { ProviderEvent, ContentBlock } from './providers/types.ts';
+import type { ProviderEvent, ContentBlock, ProviderCanUseTool } from './providers/types.ts';
 
 const MAX_MONITOR_ITERATIONS = 6;
 const WORKER_IDLE_TIMEOUT_MS = 180_000; // 3 minutes - increased from 45s to handle slow API calls and large codebases
@@ -39,6 +41,11 @@ interface AskUserDecision {
   rationale: string;
   autoResponse: string;
 }
+
+type GateResolveResult = {
+  action: 'approve' | 'reject';
+  source: 'discord' | 'terminal' | 'timeout';
+};
 
 type WorkerPassResult = Awaited<ReturnType<typeof runWorkerPass>>;
 type WorkerProgressReport = SessionWorkerProgressReport;
@@ -108,6 +115,117 @@ function buildNextProofContract(
 
 function refreshSession(session: Session): Session {
   return sessions.getSession(session.id) ?? session;
+}
+
+function waitForGateResolution(session: Session, gateId: string): Promise<GateResolveResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result: GateResolveResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    gateCoordinator.registerReceiptHandle(gateId, {
+      type: session.provider === 'codex' ? 'codex' : 'claude',
+      sessionId: session.id,
+      resolve: (action, source) => settle({ action, source }),
+      reject: () => settle({ action: 'reject', source: 'timeout' }),
+    });
+  });
+}
+
+function buildPermissionDetail(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: Parameters<ProviderCanUseTool>[2],
+): string {
+  const lines: string[] = [];
+
+  lines.push(context.title || `Claude 需要人工批准后才能执行工具：${context.displayName || toolName}`);
+
+  if (context.description) {
+    lines.push(context.description);
+  }
+
+  if (context.decisionReason) {
+    lines.push(`原因：${context.decisionReason}`);
+  }
+
+  if (context.blockedPath) {
+    lines.push(`路径：${context.blockedPath}`);
+  }
+
+  const serializedInput = truncate(JSON.stringify(input), 500);
+  if (serializedInput && serializedInput !== '{}') {
+    lines.push(`输入：${serializedInput}`);
+  }
+
+  return lines.join('\n');
+}
+
+function createClaudePermissionHandler(
+  session: Session,
+  channel: SessionChannel,
+): ProviderCanUseTool {
+  return async (toolName, input, context) => {
+    const liveSession = refreshSession(session);
+    const detail = buildPermissionDetail(toolName, input, context);
+
+    await handleAwaitingHuman(liveSession.id, detail, { source: 'claude' });
+
+    const currentSession = refreshSession(liveSession);
+    const gateId = currentSession.activeHumanGateId;
+    if (!gateId) {
+      return {
+        behavior: 'deny',
+        message: '未能创建人工门控',
+        interrupt: true,
+        toolUseID: context.toolUseID,
+      };
+    }
+
+    const resolved = await waitForGateResolution(currentSession, gateId);
+
+    await updateSessionState(currentSession.id, {
+      type: 'human_resolved',
+      sessionId: currentSession.id,
+      source: 'claude',
+      confidence: 'high',
+      timestamp: Date.now(),
+      metadata: {
+        action: resolved.action,
+        source: resolved.source,
+        toolName,
+      },
+    });
+
+    if (resolved.action === 'approve') {
+      return {
+        behavior: 'allow',
+        toolUseID: context.toolUseID,
+      };
+    }
+
+    return {
+      behavior: 'deny',
+      message:
+        resolved.source === 'timeout'
+          ? '审批超时（5 分钟）'
+          : resolved.source === 'terminal'
+            ? '已在终端拒绝'
+            : '已在 Discord 拒绝',
+      interrupt: true,
+      toolUseID: context.toolUseID,
+    };
+  };
+}
+
+function shouldUseClaudePermissionHandler(session: Session): boolean {
+  if (session.provider !== 'claude') return false;
+  if (session.mode === 'auto') return false;
+  const effectiveMode = session.claudePermissionMode ?? config.claudePermissionMode;
+  return effectiveMode !== 'bypass';
 }
 
 function applyWorkflowHook(
@@ -667,8 +785,16 @@ async function runWorkerPass(
 
   const stream =
     mode === 'continue'
-      ? sessions.continueSession(session.id)
-      : sessions.sendPrompt(session.id, prompt as string | ContentBlock[]);
+      ? sessions.continueSessionWithOverrides(session.id, {
+          canUseTool: shouldUseClaudePermissionHandler(session)
+            ? createClaudePermissionHandler(session, channel)
+            : undefined,
+        })
+      : sessions.sendPrompt(session.id, prompt as string | ContentBlock[], {
+          canUseTool: shouldUseClaudePermissionHandler(session)
+            ? createClaudePermissionHandler(session, channel)
+            : undefined,
+        });
   try {
     const result = await handleOutputStream(
       stream,
@@ -835,6 +961,20 @@ async function resolveAskUserIfPossible(
     await handleAwaitingHuman(session.id, detail, {
       source: session.provider === 'codex' ? 'codex' : 'claude',
     });
+
+    const latestSession = refreshSession(session);
+    const gateId = latestSession.activeHumanGateId;
+    if (gateId) {
+      const resolved = await waitForGateResolution(latestSession, gateId);
+      queueDigest(session.id, {
+        kind: 'human',
+        text:
+          resolved.source === 'timeout'
+            ? '人工门控超时，已回落为终端处理'
+            : `人工门控已由${resolved.source === 'discord' ? 'Discord' : '终端'}${resolved.action === 'approve' ? '批准' : '拒绝'}`,
+      });
+    }
+
     return { handled: false };
   }
 
@@ -1074,7 +1214,10 @@ export async function executeSessionContinue(
 ): Promise<void> {
   const iteration = Math.max(session.workflowState.iteration, 1);
   let liveSession = refreshSession(session);
-  if (session.mode !== 'monitor') return;
+  if (session.mode !== 'monitor') {
+    await runWorkerPass(liveSession, channel, null, iteration, 'continue');
+    return;
+  }
   const goal = liveSession.monitorGoal;
   if (!goal) {
     liveSession = applyWorkflowHook(liveSession, 'on_blocked', {

@@ -1,129 +1,233 @@
-import { describe, expect, it } from 'vitest';
-import { StateMachine } from '../src/state/state-machine.ts';
+// 统一状态机单元测试
+// 验证三层状态模型的转换规则、幂等性和非法转换拒绝
 
-describe('StateMachine priority enforcement', () => {
-  it('should ignore lower priority events while higher priority state is active', () => {
-    const machine = new StateMachine();
-    const sessionId = 'priority-test';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { StateMachine } from '../src/state/state-machine.js';
+import type {
+  SessionLifecycle,
+  ExecutionState,
+  GateStatus,
+} from '../src/state/state-machine.js';
 
-    machine.applyPlatformEvent({
-      type: 'awaiting_human',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 1,
-      stateSource: 'formal',
-    });
+describe('StateMachine - 三层状态模型', () => {
+  let sm: StateMachine;
 
-    const snapshot = machine.applyPlatformEvent({
-      type: 'thinking_started',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 2,
-      stateSource: 'formal',
-    });
-
-    expect(snapshot.state).toBe('awaiting_human');
+  beforeEach(() => {
+    sm = new StateMachine();
   });
 
-  it('should allow session_ended to transition back to offline', () => {
-    const machine = new StateMachine();
-    const sessionId = 'end-test';
-
-    machine.applyPlatformEvent({
-      type: 'awaiting_human',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 1,
-      stateSource: 'formal',
+  describe('getState', () => {
+    it('应该为新会话创建默认状态', () => {
+      const state = sm.getState('session-1');
+      expect(state.lifecycle).toBe('initializing');
+      expect(state.execution).toBeNull();
+      expect(state.gate).toBeNull();
     });
 
-    const snapshot = machine.applyPlatformEvent({
-      type: 'session_ended',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 2,
-      stateSource: 'formal',
+    it('应该返回已存在的会话状态', () => {
+      sm.transition('session-1', 'init', { lifecycle: 'active', execution: 'idle' });
+      const state = sm.getState('session-1');
+      expect(state.lifecycle).toBe('active');
+      expect(state.execution).toBe('idle');
     });
-
-    expect(snapshot.state).toBe('offline');
   });
 
-  it('should allow completed to replace working when a turn finishes', () => {
-    const machine = new StateMachine();
-    const sessionId = 'completed-test';
+  describe('transition - 生命周期转换', () => {
+    it('应该允许合法的生命周期转换', () => {
+      // initializing -> active
+      const result1 = sm.transition('session-1', 'start', { lifecycle: 'active' });
+      expect(result1.success).toBe(true);
+      expect(result1.state.lifecycle).toBe('active');
 
-    machine.applyPlatformEvent({
-      type: 'work_started',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 1,
-      stateSource: 'formal',
+      // active -> waiting_human
+      const result2 = sm.transition('session-1', 'ask_user', { lifecycle: 'waiting_human' });
+      expect(result2.success).toBe(true);
+      expect(result2.state.lifecycle).toBe('waiting_human');
+
+      // waiting_human -> active
+      const result3 = sm.transition('session-1', 'user_replied', { lifecycle: 'active' });
+      expect(result3.success).toBe(true);
+      expect(result3.state.lifecycle).toBe('active');
+
+      // active -> completed
+      const result4 = sm.transition('session-1', 'finish', { lifecycle: 'completed' });
+      expect(result4.success).toBe(true);
+      expect(result4.state.lifecycle).toBe('completed');
     });
 
-    const snapshot = machine.applyPlatformEvent({
-      type: 'completed',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 2,
-      stateSource: 'formal',
+    it('应该拒绝非法的生命周期转换', () => {
+      // initializing -> waiting_human (非法)
+      const result = sm.transition('session-1', 'invalid', { lifecycle: 'waiting_human' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('非法生命周期转换');
+      expect(result.state.lifecycle).toBe('initializing');
     });
 
-    expect(snapshot.state).toBe('completed');
+    it('应该允许从 error 恢复到 active', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
+      sm.transition('session-1', 'error', { lifecycle: 'error' });
+      const result = sm.transition('session-1', 'recover', { lifecycle: 'active' });
+      expect(result.success).toBe(true);
+      expect(result.state.lifecycle).toBe('active');
+    });
+
+    it('应该允许从 completed 重新激活到 active', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
+      sm.transition('session-1', 'finish', { lifecycle: 'completed' });
+      const result = sm.transition('session-1', 'restart', { lifecycle: 'active' });
+      expect(result.success).toBe(true);
+      expect(result.state.lifecycle).toBe('active');
+    });
   });
 
-  it('should allow session_idle to clear awaiting_human after rejection', () => {
-    const machine = new StateMachine();
-    const sessionId = 'idle-test';
-
-    machine.applyPlatformEvent({
-      type: 'awaiting_human',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 1,
-      stateSource: 'formal',
+  describe('transition - 执行状态转换', () => {
+    beforeEach(() => {
+      // 先激活会话
+      sm.transition('session-1', 'start', { lifecycle: 'active', execution: 'idle' });
     });
 
-    const snapshot = machine.applyPlatformEvent({
-      type: 'session_idle',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 2,
-      stateSource: 'formal',
+    it('应该允许合法的执行状态转换', () => {
+      // idle -> thinking
+      const result1 = sm.transition('session-1', 'think', { execution: 'thinking' });
+      expect(result1.success).toBe(true);
+      expect(result1.state.execution).toBe('thinking');
+
+      // thinking -> tool_executing
+      const result2 = sm.transition('session-1', 'exec', { execution: 'tool_executing' });
+      expect(result2.success).toBe(true);
+      expect(result2.state.execution).toBe('tool_executing');
+
+      // tool_executing -> streaming_output
+      const result3 = sm.transition('session-1', 'stream', { execution: 'streaming_output' });
+      expect(result3.success).toBe(true);
+      expect(result3.state.execution).toBe('streaming_output');
+
+      // streaming_output -> idle
+      const result4 = sm.transition('session-1', 'done', { execution: 'idle' });
+      expect(result4.success).toBe(true);
+      expect(result4.state.execution).toBe('idle');
     });
 
-    expect(snapshot.state).toBe('idle');
+    it('应该拒绝非法的执行状态转换', () => {
+      // idle -> streaming_output (跳过 thinking/tool_executing)
+      sm.transition('session-1', 'reset', { execution: 'idle' });
+      const result = sm.transition('session-1', 'invalid', { execution: 'streaming_output' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('非法执行状态转换');
+    });
+
+    it('应该拒绝在非 active 状态下设置执行状态', () => {
+      sm.transition('session-1', 'pause', { lifecycle: 'paused' });
+      const result = sm.transition('session-1', 'invalid', { execution: 'thinking' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('执行状态仅在 lifecycle=active 时有效');
+    });
+
+    it('应该在 lifecycle 离开 active 时自动清理执行状态', () => {
+      sm.transition('session-1', 'think', { execution: 'thinking' });
+      const result = sm.transition('session-1', 'pause', { lifecycle: 'paused' });
+      expect(result.success).toBe(true);
+      expect(result.state.lifecycle).toBe('paused');
+      expect(result.state.execution).toBeNull();
+    });
   });
 
-  it('human_resolved should break out of awaiting_human back to working', () => {
-    const machine = new StateMachine();
-    const sessionId = 'human-test';
+  describe('transition - 门控状态转换', () => {
+    it('应该允许独立管理门控状态', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
 
-    machine.applyPlatformEvent({
-      type: 'awaiting_human',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 1,
-      stateSource: 'formal',
+      // 创建门控
+      const result1 = sm.transition('session-1', 'gate_created', { gate: 'pending' });
+      expect(result1.success).toBe(true);
+      expect(result1.state.gate).toBe('pending');
+
+      // 批准门控
+      const result2 = sm.transition('session-1', 'gate_approved', { gate: 'approved' });
+      expect(result2.success).toBe(true);
+      expect(result2.state.gate).toBe('approved');
+
+      // 清除门控
+      const result3 = sm.transition('session-1', 'gate_cleared', { gate: null });
+      expect(result3.success).toBe(true);
+      expect(result3.state.gate).toBeNull();
     });
 
-    const snapshot = machine.applyPlatformEvent({
-      type: 'human_resolved',
-      sessionId,
-      source: 'claude',
-      confidence: 'high',
-      timestamp: 2,
-      stateSource: 'formal',
+    it('门控状态不应影响生命周期和执行状态', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active', execution: 'idle' });
+      sm.transition('session-1', 'gate', { gate: 'pending' });
+
+      const state = sm.getState('session-1');
+      expect(state.lifecycle).toBe('active');
+      expect(state.execution).toBe('idle');
+      expect(state.gate).toBe('pending');
+    });
+  });
+
+  describe('transition - 幂等性', () => {
+    it('相同状态的重复转换应该成功且不改变状态', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
+
+      const result1 = sm.transition('session-1', 'noop', { lifecycle: 'active' });
+      expect(result1.success).toBe(true);
+
+      const result2 = sm.transition('session-1', 'noop', { lifecycle: 'active' });
+      expect(result2.success).toBe(true);
+
+      const history = sm.getTransitionHistory('session-1');
+      // 只有第一次 start 会被记录，后续幂等操作不记录
+      expect(history.length).toBe(1);
     });
 
-    expect(snapshot.state).toBe('working');
+    it('执行状态的幂等转换', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active', execution: 'idle' });
+
+      const result1 = sm.transition('session-1', 'noop', { execution: 'idle' });
+      expect(result1.success).toBe(true);
+
+      const result2 = sm.transition('session-1', 'noop', { execution: 'idle' });
+      expect(result2.success).toBe(true);
+
+      const state = sm.getState('session-1');
+      expect(state.execution).toBe('idle');
+    });
+  });
+
+  describe('getTransitionHistory', () => {
+    it('应该记录所有状态转换', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
+      sm.transition('session-1', 'think', { execution: 'idle' });
+      sm.transition('session-1', 'pause', { lifecycle: 'paused' });
+
+      const history = sm.getTransitionHistory('session-1');
+      expect(history.length).toBe(3);
+      expect(history[0].event).toBe('start');
+      expect(history[1].event).toBe('think');
+      expect(history[2].event).toBe('pause');
+    });
+
+    it('应该限制历史记录数量为 100 条', () => {
+      for (let i = 0; i < 150; i++) {
+        sm.transition('session-1', `event-${i}`, {
+          lifecycle: i % 2 === 0 ? 'active' : 'paused',
+        });
+      }
+
+      const history = sm.getTransitionHistory('session-1');
+      expect(history.length).toBe(100);
+    });
+  });
+
+  describe('clearSession', () => {
+    it('应该清理会话状态和历史', () => {
+      sm.transition('session-1', 'start', { lifecycle: 'active' });
+      sm.clearSession('session-1');
+
+      const state = sm.getState('session-1');
+      expect(state.lifecycle).toBe('initializing'); // 重新创建默认状态
+
+      const history = sm.getTransitionHistory('session-1');
+      expect(history.length).toBe(0);
+    });
   });
 });
+

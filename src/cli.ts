@@ -29,6 +29,11 @@ switch (command) {
     await handleDaemon(process.argv[3]);
     break;
   }
+  case 'codex': {
+    const { handleCodexCommand } = await import('./cli/codex-launcher.ts');
+    await handleCodexCommand(process.argv.slice(3));
+    break;
+  }
   case 'help':
   case '--help':
   case '-h': {
@@ -44,6 +49,7 @@ switch (command) {
     threadcord config path         Show config file path
     threadcord project <subcommand> Manage mounted projects
     threadcord daemon              Manage background service (install/uninstall/status)
+    threadcord codex [options]     Launch managed Codex session with remote approval
     threadcord help                Show this help message
 
   \x1b[1mQuick start:\x1b[0m

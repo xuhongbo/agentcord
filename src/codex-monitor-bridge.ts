@@ -17,7 +17,15 @@ export async function handleCodexMonitorStateChange(
   extra: { cwd?: string; permissionDetail?: { command: string } },
 ): Promise<boolean> {
   const session = resolveCodexSessionFromMonitor(monitorSessionId, extra.cwd);
-  if (!session) return false;
+  if (!session) {
+    // 会话未找到，可能是快速注册尚未完成或失败
+    // 不再直接丢弃，而是记录日志供调试
+    console.debug(
+      `[CodexMonitorBridge] Session not found for ${monitorSessionId}, ` +
+      `state: ${observedState}, cwd: ${extra.cwd || 'unknown'}`
+    );
+    return false;
+  }
 
   const channel = resolveChannel(session.channelId);
   if (!isSessionChannel(channel)) return false;

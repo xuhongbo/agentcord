@@ -201,6 +201,8 @@ describe('CodexLogMonitor', () => {
       lastState: 'working',
       partial: '',
       hadToolUse: false,
+      registered: false,
+      pollInterval: 500,
     });
 
     (monitor as any).cleanStaleFiles();
@@ -212,5 +214,63 @@ describe('CodexLogMonitor', () => {
       { cwd: '/repo' },
     );
     expect((monitor as any).tracked.size).toBe(0);
+  });
+
+  it('在读到首个有效事件时触发快速注册', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'codex-monitor-'));
+    const { filePath, fileName } = makeSessionDir(baseDir);
+    const onStateChange = vi.fn();
+    const onRegisterSession = vi.fn().mockResolvedValue(true);
+    const monitor = new CodexLogMonitor(baseDir, onStateChange, onRegisterSession);
+
+    appendFileSync(
+      filePath,
+      `${JSON.stringify({ type: 'session_meta', payload: { cwd: '/test/repo' } })}\n`,
+      'utf8',
+    );
+    appendFileSync(
+      filePath,
+      `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } })}\n`,
+      'utf8',
+    );
+
+    (monitor as any).pollFile(filePath, fileName);
+
+    expect(onRegisterSession).toHaveBeenCalledTimes(1);
+    expect(onRegisterSession).toHaveBeenCalledWith('f-g-h-i-j', '/test/repo');
+    expect(onStateChange).toHaveBeenCalledWith(
+      'codex:f-g-h-i-j',
+      'idle',
+      'session_meta',
+      { cwd: '/test/repo' },
+    );
+  });
+
+  it('快速注册只触发一次，不会重复注册', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'codex-monitor-'));
+    const { filePath, fileName } = makeSessionDir(baseDir);
+    const onStateChange = vi.fn();
+    const onRegisterSession = vi.fn().mockResolvedValue(true);
+    const monitor = new CodexLogMonitor(baseDir, onStateChange, onRegisterSession);
+
+    appendFileSync(
+      filePath,
+      `${JSON.stringify({ type: 'session_meta', payload: { cwd: '/test/repo' } })}\n`,
+      'utf8',
+    );
+    appendFileSync(
+      filePath,
+      `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } })}\n`,
+      'utf8',
+    );
+    appendFileSync(
+      filePath,
+      `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } })}\n`,
+      'utf8',
+    );
+
+    (monitor as any).pollFile(filePath, fileName);
+
+    expect(onRegisterSession).toHaveBeenCalledTimes(1);
   });
 });

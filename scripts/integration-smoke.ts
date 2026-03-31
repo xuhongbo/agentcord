@@ -9,6 +9,7 @@ import {
   type CategoryChannel,
   type ForumChannel,
   type AnyThreadChannel,
+  type Guild,
 } from 'discord.js';
 import { config } from '../src/config.ts';
 import { handleProject, handleAgent, handleSubagent, handleShell } from '../src/command-handlers.ts';
@@ -27,6 +28,7 @@ import { loadSessions, getSession, getSessionsByCategory } from '../src/thread-m
 import { loadArchived, getArchivedSessions } from '../src/archive-manager.ts';
 import { CodexLogMonitor } from '../src/monitors/codex-log-monitor.ts';
 import { handleCodexMonitorStateChange } from '../src/codex-monitor-bridge.ts';
+import { cleanupSessionsById } from '../src/session-housekeeping.ts';
 
 type OptionMap = Record<string, string | null | undefined>;
 
@@ -170,6 +172,9 @@ let tempCategory: CategoryChannel | null = null;
 let cleanupBinding = false;
 let existingControl: TextChannel | null = null;
 let rebindForSmoke = false;
+let guild: Guild | null = null;
+const createdSessionIds = new Set<string>();
+const createdHistoryThreadIds = new Set<string>();
 let originalBinding:
   | {
       categoryId?: string;
@@ -203,7 +208,7 @@ try {
   await client.login(config.token);
   await waitFor(1000);
 
-  const guild = await client.guilds.fetch(config.guildId);
+  guild = await client.guilds.fetch(config.guildId);
   await guild.channels.fetch();
   step(report, 'discord-login', 'passed', `已连接到 guild ${guild.name}`);
 
@@ -321,6 +326,7 @@ try {
     );
   }
   report.mainSessionChannelId = mainSession.channelId;
+  createdSessionIds.add(mainSession.id);
   step(report, 'agent-spawn', 'passed', `创建主代理会话 ${mainLabel}`);
 
   const mainChannel = (await guild.channels.fetch(mainSession.channelId)) as TextChannel;
@@ -344,6 +350,7 @@ try {
     throw new Error('子代理未创建成功');
   }
   report.subagentThreadId = subagent.channelId;
+  createdSessionIds.add(subagent.id);
   step(report, 'subagent-run', 'passed', `创建子代理线程 ${subLabel}`);
 
   if (!config.shellEnabled) {
@@ -410,6 +417,7 @@ try {
       throw new Error('Codex 冒烟会话未创建成功');
     }
     report.codexSessionChannelId = codexSession.channelId;
+    createdSessionIds.add(codexSession.id);
 
     const codexChannel = (await guild.channels.fetch(codexSession.channelId)) as TextChannel;
     await withTimeout(
@@ -499,6 +507,11 @@ try {
   if (archivedAfter <= archivedBefore) {
     throw new Error('归档记录未增加');
   }
+  for (const archivedRecord of getArchivedSessions(category.id).slice(archivedBefore)) {
+    if (archivedRecord.forumPostId) {
+      createdHistoryThreadIds.add(archivedRecord.forumPostId);
+    }
+  }
   step(report, 'agent-archive', 'passed', '主会话已归档到 #history');
 
   const historyForum = boundProject?.historyChannelId
@@ -520,6 +533,18 @@ try {
   step(report, 'integration', 'failed', message);
 } finally {
   try {
+    if (guild) {
+      await cleanupSessionsById(
+        guild,
+        createdSessionIds,
+        'threadcord integration smoke cleanup',
+      ).catch(() => {});
+
+      for (const threadId of createdHistoryThreadIds) {
+        const thread = await guild.channels.fetch(threadId).catch(() => null);
+        await thread?.delete('threadcord integration smoke cleanup').catch(() => {});
+      }
+    }
     if (bootstrapChannel && !existingControl) {
       await bootstrapChannel.delete('threadcord integration smoke cleanup').catch(() => {});
     }

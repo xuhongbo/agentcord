@@ -26,11 +26,19 @@ export class StatusCard {
     return this.messageId;
   }
 
-  async initialize(data: { turn?: number; updatedAt?: number; phase?: string } = {}): Promise<void> {
+  async initialize(data: {
+    turn?: number;
+    updatedAt?: number;
+    phase?: string;
+    remoteHumanControl?: boolean;
+    provider?: 'claude' | 'codex';
+  } = {}): Promise<void> {
     const payload = {
       turn: data.turn ?? 1,
       updatedAt: data.updatedAt ?? Date.now(),
       phase: data.phase,
+      remoteHumanControl: data.remoteHumanControl,
+      provider: data.provider,
     };
 
     if (this.messageId) {
@@ -42,7 +50,16 @@ export class StatusCard {
     await this.sendNewMessage(embed);
   }
 
-  async update(state: UnifiedState, data: { turn: number; updatedAt: number; phase?: string }): Promise<void> {
+  async update(
+    state: UnifiedState,
+    data: {
+      turn: number;
+      updatedAt: number;
+      phase?: string;
+      remoteHumanControl?: boolean;
+      provider?: 'claude' | 'codex';
+    },
+  ): Promise<void> {
     const embed = this.buildEmbed(state, data);
     if (!this.messageId) {
       await this.sendNewMessage(embed);
@@ -52,11 +69,16 @@ export class StatusCard {
   }
 
   private async sendNewMessage(embed: EmbedBuilder): Promise<void> {
-    const msg = await this.channel.send({ embeds: [embed] });
-    this.messageId = msg.id;
-    await msg.pin().catch(() => {
-      // Pin 失败视为降级，状态卡仍然继续工作
-    });
+    try {
+      const msg = await this.channel.send({ embeds: [embed] });
+      this.messageId = msg.id;
+      await Promise.resolve(msg.pin?.()).catch(() => {
+        // Pin 失败视为降级，状态卡仍然继续工作
+      });
+    } catch (error) {
+      console.error('状态卡创建失败:', error);
+      throw error;
+    }
   }
 
   private async editExistingMessage(embed: EmbedBuilder): Promise<void> {
@@ -66,28 +88,48 @@ export class StatusCard {
     }
 
     try {
+      // 使用 PATCH 更新现有消息，而非删除后重建
       const msg = await this.channel.messages.edit(this.messageId, {
         embeds: [embed],
         components: [],
       });
       this.messageId = msg.id;
-      await msg.pin().catch(() => {
+      await Promise.resolve(msg.pin?.()).catch(() => {
         // Pin 失败视为降级
       });
-    } catch {
+    } catch (error) {
+      // 如果消息不存在或无法编辑，降级为创建新消息
+      console.warn(`状态卡编辑失败 (${this.messageId}), 创建新消息:`, error);
       await this.sendNewMessage(embed);
     }
   }
 
-  private buildEmbed(state: UnifiedState, data: { turn: number; updatedAt: number; phase?: string }): EmbedBuilder {
+  private buildEmbed(
+    state: UnifiedState,
+    data: {
+      turn: number;
+      updatedAt: number;
+      phase?: string;
+      remoteHumanControl?: boolean;
+      provider?: 'claude' | 'codex';
+    },
+  ): EmbedBuilder {
     const embed = new EmbedBuilder()
       .setColor(STATE_COLORS[state])
       .setTitle(`🤖 ${STATE_LABELS[state]}`)
       .addFields(
         { name: '轮次', value: `#${data.turn}`, inline: true },
-        { name: '更新', value: `<t:${Math.floor(data.updatedAt / 1000)}:R>`, inline: true }
+        { name: '更新', value: `<t:${Math.floor(data.updatedAt / 1000)}:R>`, inline: true },
       )
       .setTimestamp();
+
+    // 添加受管/非受管标签（仅 Codex 会话显示）
+    if (data.provider === 'codex') {
+      const managedLabel = data.remoteHumanControl
+        ? '✓ 受管会话'
+        : '○ 非受管会话（仅状态监控）';
+      embed.addFields({ name: '会话类型', value: managedLabel, inline: true });
+    }
 
     if (data.phase) {
       this.validate(data.phase);

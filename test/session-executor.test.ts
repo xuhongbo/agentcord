@@ -6,12 +6,20 @@ const setMonitorGoal = vi.fn();
 const updateWorkflowState = vi.fn();
 const sendPrompt = vi.fn();
 const continueSession = vi.fn();
+const continueSessionWithOverrides = vi.fn();
 const sendMonitorPrompt = vi.fn();
 const consumeAbortReason = vi.fn();
 const updateSessionState = vi.fn();
 const queueDigest = vi.fn();
 const handleResultEvent = vi.fn();
 const handleAwaitingHuman = vi.fn();
+const registerReceiptHandle = vi.fn();
+
+vi.mock('../src/config.ts', () => ({
+  config: {
+    claudePermissionMode: 'normal',
+  },
+}));
 
 vi.mock('../src/output-handler.ts', () => ({
   handleOutputStream,
@@ -30,12 +38,18 @@ vi.mock('../src/thread-manager.ts', () => ({
   updateWorkflowState,
   sendPrompt,
   continueSession,
+  continueSessionWithOverrides,
   sendMonitorPrompt,
   consumeAbortReason,
   abortSessionWithReason: vi.fn(),
 }));
 
-const { executeSessionPrompt } = await import('../src/session-executor.ts');
+vi.mock('../src/state/gate-coordinator.ts', () => ({
+  gateCoordinator: {
+    registerReceiptHandle,
+  },
+}));
+const { executeSessionPrompt, executeSessionContinue } = await import('../src/session-executor.ts');
 
 describe('executeSessionPrompt', () => {
   beforeEach(() => {
@@ -43,6 +57,9 @@ describe('executeSessionPrompt', () => {
     handleResultEvent.mockResolvedValue(undefined);
     updateSessionState.mockResolvedValue(undefined);
     handleAwaitingHuman.mockResolvedValue('msg-1');
+    registerReceiptHandle.mockImplementation((_gateId: string, handle: { resolve: (action: 'approve' | 'reject', source: 'discord' | 'terminal') => void }) => {
+      handle.resolve('approve', 'discord');
+    });
   });
 
   it('persists the first monitor goal from the initial prompt', async () => {
@@ -151,6 +168,7 @@ describe('executeSessionPrompt', () => {
       mode: 'monitor',
       monitorGoal: 'Finish the task',
       provider: 'codex',
+      activeHumanGateId: 'gate-ask-1',
       workflowState: { status: 'idle', iteration: 0, updatedAt: Date.now() },
     };
 
@@ -186,6 +204,13 @@ describe('executeSessionPrompt', () => {
       'monitor-ask',
       JSON.stringify({ questions: [{ question: 'Continue?' }] }),
       expect.objectContaining({ source: 'codex' }),
+    );
+    expect(registerReceiptHandle).toHaveBeenCalledWith(
+      'gate-ask-1',
+      expect.objectContaining({
+        type: 'codex',
+        sessionId: 'monitor-ask',
+      }),
     );
   });
 
@@ -237,5 +262,49 @@ describe('executeSessionPrompt', () => {
       'Need human help',
       expect.objectContaining({ source: 'codex' }),
     );
+  });
+
+  it('非 monitor 模式下 continue 会真正调用继续执行链路', async () => {
+    const session = {
+      id: 'normal-continue',
+      mode: 'normal',
+      monitorGoal: undefined,
+      provider: 'claude',
+      workflowState: { status: 'idle', iteration: 1, updatedAt: Date.now() },
+    };
+
+    getSession.mockImplementation(() => session);
+    continueSessionWithOverrides.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        success: true,
+        costUsd: 0,
+        durationMs: 1,
+        numTurns: 1,
+        errors: [],
+      };
+    });
+    handleOutputStream.mockResolvedValue({
+      text: 'continued',
+      askedUser: false,
+      hadError: false,
+      success: true,
+      commandCount: 0,
+      fileChangeCount: 0,
+      recentCommands: [],
+      changedFiles: [],
+    });
+    consumeAbortReason.mockReturnValue(undefined);
+
+    const channel = { send: vi.fn().mockResolvedValue(undefined) };
+    await executeSessionContinue(session as never, channel as never);
+
+    expect(continueSessionWithOverrides).toHaveBeenCalledWith(
+      'normal-continue',
+      expect.objectContaining({
+        canUseTool: expect.any(Function),
+      }),
+    );
+    expect(handleOutputStream).toHaveBeenCalled();
   });
 });

@@ -33,6 +33,7 @@ import {
 import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
 import { updateSessionState } from './panel-adapter.ts';
 import { isUserAllowed, truncate } from './utils.ts';
+import { gateCoordinator } from './state/gate-coordinator.ts';
 
 async function resolveAwaitingHumanIfNeeded(sessionId: string): Promise<void> {
   const session = sessions.getSession(sessionId);
@@ -78,7 +79,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     const parts = customId.split(':');
     const sessionId = parts[1];
     const turn = parseInt(parts[2], 10);
-    const action = parts[3];
+    const action = parts[3] as 'approve' | 'deny';
 
     const session = sessions.getSession(sessionId);
     if (!session) {
@@ -86,35 +87,70 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       return;
     }
 
+    // 检查轮次是否匹配
     if (session.currentTurn !== turn) {
-      await interaction.reply({ content: '此请求已过期', ephemeral: true });
+      await interaction.reply({ content: '此请求已过期（轮次不匹配）', ephemeral: true });
       return;
     }
 
+    // 检查消息 ID 是否匹配
     if (session.currentInteractionMessageId && interaction.message.id !== session.currentInteractionMessageId) {
-      await interaction.reply({ content: '此请求已过期', ephemeral: true });
+      await interaction.reply({ content: '此请求已过期（消息不匹配）', ephemeral: true });
       return;
     }
 
+    // 检查是否已被处理
     if (session.humanResolved) {
       await interaction.reply({ content: '已被其他人处理', ephemeral: true });
       return;
     }
 
-    session.humanResolved = true;
+    // 获取当前交互卡对应的活跃门控
+    const activeGate = session.activeHumanGateId
+      ? gateCoordinator.getGate(session.activeHumanGateId)
+      : gateCoordinator.getActiveGateForSession(sessionId);
+    if (!activeGate) {
+      await interaction.reply({ content: '未找到活跃的门控记录', ephemeral: true });
+      return;
+    }
+
+    // 尝试通过 Discord 解决门控（CAS 更新）
+    const result = await gateCoordinator.resolveFromDiscord(
+      activeGate.id,
+      action === 'approve' ? 'approve' : 'reject',
+    );
+
+    if (!result.success) {
+      await interaction.reply({
+        content: `处理失败: ${result.message || '未知错误'}`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // 更新会话状态
     sessions.updateSession(sessionId, {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
 
+    // 更新交互卡
     await interaction.update({
       components: [],
       embeds: interaction.message.embeds.map((e) => ({
         ...e,
-        footer: { text: `${interaction.user.tag} ${action === 'approve' ? '已批准' : '已拒绝'} - ${new Date().toLocaleTimeString()}` },
+        footer: {
+          text: `${interaction.user.tag} ${action === 'approve' ? '已批准' : '已拒绝'} - ${new Date().toLocaleTimeString()}`
+        },
       })),
     });
 
+    if (result.handledByReceipt) {
+      return;
+    }
+
+    // 根据操作继续或停止
     if (action === 'approve') {
       await updateSessionState(sessionId, {
         type: 'human_resolved',
@@ -122,13 +158,16 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         source: session.provider === 'codex' ? 'codex' : 'claude',
         confidence: 'high',
         timestamp: Date.now(),
-        metadata: { action },
+        metadata: { action: 'approve' },
       });
       try {
         const channel = interaction.channel as SessionChannel;
         await executeSessionContinue(session, channel);
       } catch (err: unknown) {
-        await interaction.followUp({ content: `继续会话失败: ${(err as Error).message}`, ephemeral: true });
+        await interaction.followUp({
+          content: `继续会话失败: ${(err as Error).message}`,
+          ephemeral: true
+        });
       }
     } else {
       await updateSessionState(sessionId, {
@@ -137,7 +176,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
         source: session.provider === 'codex' ? 'codex' : 'claude',
         confidence: 'high',
         timestamp: Date.now(),
-        metadata: { action },
+        metadata: { action: 'reject' },
       });
       await interaction.followUp({
         content: '已拒绝本轮请求，状态已回落到待命。',

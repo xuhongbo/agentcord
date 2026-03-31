@@ -5,6 +5,9 @@ const updateSession = vi.fn();
 const executeSessionContinue = vi.fn();
 const executeSessionPrompt = vi.fn();
 const updateSessionState = vi.fn();
+const getGate = vi.fn();
+const getActiveGateForSession = vi.fn();
+const resolveFromDiscord = vi.fn();
 
 vi.mock('../src/config.ts', () => ({
   config: {
@@ -43,6 +46,14 @@ vi.mock('../src/panel-adapter.ts', () => ({
   updateSessionState,
 }));
 
+vi.mock('../src/state/gate-coordinator.ts', () => ({
+  gateCoordinator: {
+    getGate,
+    getActiveGateForSession,
+    resolveFromDiscord,
+  },
+}));
+
 const { handleButton } = await import('../src/button-handler.ts');
 
 function createInteraction(customId: string) {
@@ -67,8 +78,12 @@ describe('button-handler awaiting_human', () => {
       currentTurn: 2,
       humanResolved: false,
       provider: 'codex',
+      activeHumanGateId: 'gate-1',
       currentInteractionMessageId: 'msg-active',
     });
+    getGate.mockReturnValue({ id: 'gate-1', status: 'pending' });
+    getActiveGateForSession.mockReturnValue(undefined);
+    resolveFromDiscord.mockResolvedValue({ success: true });
   });
 
   it('approve 会清理交互状态、同步状态并继续会话', async () => {
@@ -79,6 +94,7 @@ describe('button-handler awaiting_human', () => {
     expect(updateSession).toHaveBeenCalledWith('s1', {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
     expect(updateSessionState).toHaveBeenCalledWith(
       's1',
@@ -95,6 +111,7 @@ describe('button-handler awaiting_human', () => {
     expect(updateSession).toHaveBeenCalledWith('s1', {
       humanResolved: true,
       currentInteractionMessageId: undefined,
+      activeHumanGateId: undefined,
     });
     expect(updateSessionState).toHaveBeenCalledWith(
       's1',
@@ -113,7 +130,7 @@ describe('button-handler awaiting_human', () => {
     await handleButton(interaction as never);
 
     expect(interaction.reply).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '此请求已过期', ephemeral: true }),
+      expect.objectContaining({ content: '此请求已过期（消息不匹配）', ephemeral: true }),
     );
     expect(executeSessionContinue).not.toHaveBeenCalled();
     expect(updateSessionState).not.toHaveBeenCalled();
