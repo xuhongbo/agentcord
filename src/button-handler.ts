@@ -31,6 +31,7 @@ import {
   getQuestionCount,
 } from './output-handler.ts';
 import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
+import { updateSessionState } from './panel-adapter.ts';
 import { isUserAllowed, truncate } from './utils.ts';
 
 export async function handleButton(interaction: ButtonInteraction): Promise<void> {
@@ -49,6 +50,75 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       content: stopped ? 'Generation stopped.' : 'Session was not generating.',
       ephemeral: true,
     });
+    return;
+  }
+
+  // Awaiting human buttons
+  if (customId.startsWith('awaiting_human:')) {
+    const parts = customId.split(':');
+    const sessionId = parts[1];
+    const turn = parseInt(parts[2], 10);
+    const action = parts[3];
+
+    const session = sessions.getSession(sessionId);
+    if (!session) {
+      await interaction.reply({ content: '会话不存在', ephemeral: true });
+      return;
+    }
+
+    if (session.currentTurn !== turn) {
+      await interaction.reply({ content: '此请求已过期', ephemeral: true });
+      return;
+    }
+
+    if (session.humanResolved) {
+      await interaction.reply({ content: '已被其他人处理', ephemeral: true });
+      return;
+    }
+
+    session.humanResolved = true;
+    sessions.updateSession(sessionId, {
+      humanResolved: true,
+      currentInteractionMessageId: undefined,
+    });
+
+    await interaction.update({
+      components: [],
+      embeds: interaction.message.embeds.map((e) => ({
+        ...e,
+        footer: { text: `${interaction.user.tag} ${action === 'approve' ? '已批准' : '已拒绝'} - ${new Date().toLocaleTimeString()}` },
+      })),
+    });
+
+    if (action === 'approve') {
+      await updateSessionState(sessionId, {
+        type: 'human_resolved',
+        sessionId,
+        source: session.provider === 'codex' ? 'codex' : 'claude',
+        confidence: 'high',
+        timestamp: Date.now(),
+        metadata: { action },
+      });
+      try {
+        const channel = interaction.channel as SessionChannel;
+        await executeSessionContinue(session, channel);
+      } catch (err: unknown) {
+        await interaction.followUp({ content: `继续会话失败: ${(err as Error).message}`, ephemeral: true });
+      }
+    } else {
+      await updateSessionState(sessionId, {
+        type: 'session_idle',
+        sessionId,
+        source: session.provider === 'codex' ? 'codex' : 'claude',
+        confidence: 'high',
+        timestamp: Date.now(),
+        metadata: { action },
+      });
+      await interaction.followUp({
+        content: '已拒绝本轮请求，状态已回落到待命。',
+        ephemeral: true,
+      });
+    }
     return;
   }
 

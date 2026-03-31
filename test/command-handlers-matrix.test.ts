@@ -41,6 +41,8 @@ const setMonitorGoal = vi.fn();
 const setAgentPersona = vi.fn();
 const setVerbose = vi.fn();
 const setModel = vi.fn();
+const setCurrentInteractionMessage = vi.fn();
+const setStatusCardBinding = vi.fn();
 
 const spawnSubagent = vi.fn();
 const getSubagents = vi.fn();
@@ -53,8 +55,7 @@ const executeShellCommand = vi.fn();
 const listProcesses = vi.fn();
 const killProcess = vi.fn();
 const isUserAllowed = vi.fn(() => true);
-const registerSessionStatusMessage = vi.fn();
-const buildSessionStatusEmbed = vi.fn(() => ({ addFields: vi.fn() }));
+const registerExistingStatusCard = vi.fn();
 
 vi.mock('../src/config.ts', () => ({ config }));
 vi.mock('../src/project-manager.ts', () => ({
@@ -83,15 +84,16 @@ vi.mock('../src/thread-manager.ts', () => ({
   setAgentPersona,
   setVerbose,
   setModel,
+  setCurrentInteractionMessage,
+  setStatusCardBinding,
 }));
 vi.mock('../src/subagent-manager.ts', () => ({ spawnSubagent, getSubagents }));
 vi.mock('../src/archive-manager.ts', () => ({ archiveSession }));
 vi.mock('../src/session-executor.ts', () => ({ executeSessionPrompt, executeSessionContinue }));
 vi.mock('../src/output-handler.ts', () => ({ makeModeButtons, resolveEffectiveClaudePermissionMode }));
 vi.mock('../src/shell-handler.ts', () => ({ executeShellCommand, listProcesses, killProcess }));
-vi.mock('../src/session-output-coordinator.ts', () => ({
-  registerSessionStatusMessage,
-  buildSessionStatusEmbed,
+vi.mock('../src/panel-adapter.ts', () => ({
+  registerExistingStatusCard,
 }));
 vi.mock('../src/utils.ts', () => ({
   isUserAllowed,
@@ -257,7 +259,8 @@ describe('agent commands', () => {
     createSession.mockResolvedValue({ ...session, channelId: 'created-1', provider: 'codex' });
     const interaction = makeInteraction({ subcommand: 'spawn', values: { label: 'test' }, channel: control, guild });
     await handleAgent(interaction as never);
-    expect(registerSessionStatusMessage).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'created-1' }), created, statusMessage);
+    expect(registerExistingStatusCard).toHaveBeenCalledWith('session-1', created, 'msg-1');
+    expect(setStatusCardBinding).toHaveBeenCalledWith('session-1', { messageId: 'msg-1' });
   });
 
   it('spawn 在非 control 频道时重定向', async () => {

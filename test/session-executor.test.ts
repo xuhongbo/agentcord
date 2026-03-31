@@ -8,18 +8,18 @@ const sendPrompt = vi.fn();
 const continueSession = vi.fn();
 const sendMonitorPrompt = vi.fn();
 const consumeAbortReason = vi.fn();
-const updateSessionStatus = vi.fn();
-const finalizeSessionPresentation = vi.fn();
+const updateSessionState = vi.fn();
+const queueDigest = vi.fn();
+const handleResultEvent = vi.fn();
 
 vi.mock('../src/output-handler.ts', () => ({
   handleOutputStream,
 }));
 
-vi.mock('../src/session-output-coordinator.ts', () => ({
-  updateSessionStatus,
-  finalizeSessionPresentation,
-  queueSessionDigest: vi.fn(),
-  flushSessionDigest: vi.fn(),
+vi.mock('../src/panel-adapter.ts', () => ({
+  updateSessionState,
+  queueDigest,
+  handleResultEvent,
 }));
 
 vi.mock('../src/thread-manager.ts', () => ({
@@ -30,6 +30,7 @@ vi.mock('../src/thread-manager.ts', () => ({
   continueSession,
   sendMonitorPrompt,
   consumeAbortReason,
+  abortSessionWithReason: vi.fn(),
 }));
 
 const { executeSessionPrompt } = await import('../src/session-executor.ts');
@@ -37,6 +38,8 @@ const { executeSessionPrompt } = await import('../src/session-executor.ts');
 describe('executeSessionPrompt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    handleResultEvent.mockResolvedValue(undefined);
+    updateSessionState.mockResolvedValue(undefined);
   });
 
   it('persists the first monitor goal from the initial prompt', async () => {
@@ -90,7 +93,7 @@ describe('executeSessionPrompt', () => {
     expect(setMonitorGoal).toHaveBeenCalledWith('monitor-1', 'Fix the failing workflow.');
   });
 
-  it('monitor 完成时通过协调器收尾而不是直接发频道消息', async () => {
+  it('monitor 完成时通过 panel-adapter 收尾而不是直接发频道消息', async () => {
     const session = {
       id: 'monitor-2',
       mode: 'monitor',
@@ -132,8 +135,10 @@ describe('executeSessionPrompt', () => {
 
     await executeSessionPrompt(session as never, channel as never, 'Fix the failing workflow.');
 
-    expect(finalizeSessionPresentation).toHaveBeenCalled();
+    expect(handleResultEvent).toHaveBeenCalled();
+    const call = handleResultEvent.mock.calls.at(-1);
+    expect(call?.[0]).toBe('monitor-2');
+    expect(call?.[2]).toBe('Done');
     expect(channel.send).not.toHaveBeenCalledWith(expect.stringContaining('Monitor: completion bar met'));
   });
-
 });

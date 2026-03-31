@@ -4,10 +4,10 @@ type SessionChannel = TextChannel | AnyThreadChannel;
 import * as sessions from './thread-manager.ts';
 import { handleOutputStream } from './output-handler.ts';
 import {
-  finalizeSessionPresentation,
-  queueSessionDigest,
-  updateSessionStatus,
-} from './session-output-coordinator.ts';
+  handleResultEvent,
+  queueDigest,
+  updateSessionState,
+} from './panel-adapter.ts';
 import { isAbortError, truncate } from './utils.ts';
 import type {
   ThreadSession as Session,
@@ -263,6 +263,40 @@ function annotateInactivityAbort(text: string): string {
   const trimmed = text.trim();
   if (trimmed.includes(note)) return trimmed;
   return trimmed ? `${trimmed}\n\n${note}` : note;
+}
+
+function createSyntheticResult(
+  success: boolean,
+  summary: string,
+  sessionEnd = false,
+): Extract<ProviderEvent, { type: 'result' }> {
+  return {
+    type: 'result',
+    success,
+    costUsd: 0,
+    durationMs: 0,
+    numTurns: 0,
+    errors: success ? [] : [summary],
+    metadata: { sessionEnd },
+  };
+}
+
+async function updatePanelState(
+  session: Session,
+  type: 'work_started' | 'awaiting_human' | 'errored',
+  channel?: SessionChannel,
+): Promise<void> {
+  await updateSessionState(
+    session.id,
+    {
+      type,
+      sessionId: session.id,
+      source: session.provider === 'codex' ? 'codex' : 'claude',
+      confidence: 'high',
+      timestamp: Date.now(),
+    },
+    channel ? { channel, sourceHint: session.provider } : { sourceHint: session.provider },
+  );
 }
 
 function buildMonitorPrompt(
@@ -792,19 +826,11 @@ async function resolveAskUserIfPossible(
       awaitingHumanReason:
         decision.rationale || 'The worker hit a real non-obvious decision point.',
     });
-    await updateSessionStatus(session, channel, {
-      state: 'awaiting_human',
-      phase: '等待人工决策',
-      summary: truncate(
-        decision.rationale || 'The worker hit a real non-obvious decision point.',
-        200,
-      ),
-      iteration,
-    });
+    await updatePanelState(session, 'awaiting_human', channel);
     return { handled: false };
   }
 
-  queueSessionDigest(session.id, {
+  queueDigest(session.id, {
     kind: 'monitor',
     text: `自动处理了一个提问分支：${truncate(
       decision.rationale || 'The better path was already implied by the original request.',
@@ -879,13 +905,8 @@ async function runMonitorLoop(
         lastMonitorDecision: preclassifiedDecision,
         nextProofContract,
       });
-      await updateSessionStatus(currentSession, channel, {
-        state: 'running',
-        phase: '继续执行',
-        summary: truncate(preclassifiedDecision.rationale, 160),
-        iteration,
-      });
-      queueSessionDigest(currentSession.id, {
+      await updatePanelState(currentSession, 'work_started', channel);
+      queueDigest(currentSession.id, {
         kind: 'monitor',
         text: `第 ${iteration} 轮监控判断任务仍未完成：${truncate(preclassifiedDecision.rationale, 120)}`,
       });
@@ -932,10 +953,7 @@ async function runMonitorLoop(
         decision.completionSummary ||
         decision.rationale ||
         'The monitor judged the request complete.';
-      await finalizeSessionPresentation(currentSession, channel, {
-        outcome: 'completed',
-        summary: truncate(summary, 400),
-      });
+      await handleResultEvent(currentSession.id, createSyntheticResult(true, summary), summary);
       return;
     }
 
@@ -949,20 +967,13 @@ async function runMonitorLoop(
         nextProofContract: undefined,
       });
       const blocker = decision.rationale || 'The monitor reported a blocker.';
-      await finalizeSessionPresentation(currentSession, channel, {
-        outcome: 'blocked',
-        summary: truncate(blocker, 400),
-      });
+      await handleResultEvent(currentSession.id, createSyntheticResult(false, blocker), blocker);
+      await updatePanelState(currentSession, 'awaiting_human', channel);
       return;
     }
 
-    await updateSessionStatus(currentSession, channel, {
-      state: 'running',
-      phase: '继续执行',
-      summary: truncate(decision.rationale || 'continue working', 160),
-      iteration,
-    });
-    queueSessionDigest(currentSession.id, {
+    await updatePanelState(currentSession, 'work_started', channel);
+    queueDigest(currentSession.id, {
       kind: 'monitor',
       text: `第 ${iteration} 轮监控继续：${truncate(decision.rationale || 'continue working', 120)}`,
     });
@@ -999,11 +1010,14 @@ async function runMonitorLoop(
     lastMonitorDecision: limitDecision,
     nextProofContract: buildNextProofContract(goal, limitDecision),
   });
-  await finalizeSessionPresentation(currentSession, channel, {
-    outcome: 'blocked',
-    summary:
-      'Reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.',
-  });
+  const limitSummary =
+    'Reached the continuation safety limit. Review the latest pass to decide whether more manual steering is needed.';
+  await handleResultEvent(
+    currentSession.id,
+    createSyntheticResult(false, limitSummary),
+    limitSummary,
+  );
+  await updatePanelState(currentSession, 'awaiting_human', channel);
 }
 
 export async function executeSessionPrompt(
@@ -1068,11 +1082,10 @@ export async function executeSessionContinue(
         blockingReason: 'Monitor mode is enabled but no monitor goal is saved for this session.',
       },
     });
-    await finalizeSessionPresentation(liveSession, channel, {
-      outcome: 'blocked',
-      summary:
-        'Monitor mode is enabled but no monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.',
-    });
+    const summary =
+      'Monitor mode is enabled but no monitor goal is saved for this session. Use `/agent goal goal:<text>` or send a fresh request to set one before continuing.';
+    await handleResultEvent(liveSession.id, createSyntheticResult(false, summary), summary);
+    await updatePanelState(liveSession, 'awaiting_human', channel);
     return;
   }
   const nextProofContract = liveSession.workflowState.nextProofContract;
