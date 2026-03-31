@@ -53,6 +53,33 @@ export function getProjectByName(name: string): Project | undefined {
   return toProject(name);
 }
 
+export function findProjectByCwd(cwd: string): Project | undefined {
+  // 规范化路径
+  const normalizedCwd = cwd.replace(/\\/g, '/').toLowerCase();
+
+  for (const project of getAllRegisteredProjects()) {
+    if (!project.discordCategoryId) continue;
+    const projectPath = project.path.replace(/\\/g, '/').toLowerCase();
+
+    // 检查 cwd 是否在项目目录下
+    if (normalizedCwd === projectPath || normalizedCwd.startsWith(projectPath + '/')) {
+      return {
+        categoryId: project.discordCategoryId,
+        historyChannelId: project.historyChannelId,
+        controlChannelId: project.controlChannelId,
+        name: project.name,
+        directory: project.path,
+        personality: project.personality,
+        skills: Object.entries(project.skills).map(([name, prompt]) => ({ name, prompt })),
+        mcpServers: project.mcpServers,
+        createdAt: project.createdAt,
+      };
+    }
+  }
+
+  return undefined;
+}
+
 export function getAllProjects(): Record<string, Project> {
   const out: Record<string, Project> = {};
   for (const project of getAllRegisteredProjects()) {

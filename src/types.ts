@@ -45,6 +45,14 @@ export interface ThreadSession {
   humanResolved: boolean; // 当前轮次是否已被人工处理
   currentInteractionMessageId?: string; // 当前等待人工的交互消息 ID
   statusCardMessageId?: string; // 常驻状态卡消息 ID
+  // 本地会话实时感知字段（设计文档 11.2 节）
+  discoverySource?: 'discord' | 'claude-hook' | 'codex-log' | 'sync'; // 会话发现来源
+  lastObservedState?: string; // 最近本地观察到的状态
+  lastObservedEventKey?: string; // 最近本地观察到的事件键
+  lastObservedAt?: number; // 最近本地观察时间戳
+  lastObservedCwd?: string; // 最近本地观察到的工作目录
+  remoteHumanControl?: boolean; // 是否支持远程人工控制（受管会话）
+  activeHumanGateId?: string; // 当前活跃的人工门控 ID
 }
 
 export type SessionPersistData = Omit<ThreadSession, 'isGenerating'>;
@@ -198,6 +206,31 @@ export interface SessionNextProofContract {
   requiredValidation: string[];
   stopCondition: string;
   avoidUntilProved: string[];
+}
+
+// ─── Human Gate (人工门控) ────────────────────────────────────────────────────
+
+export type HumanGateType = 'binary-approval' | 'text-question' | 'notification';
+export type HumanGateStatus = 'pending' | 'approved' | 'denied' | 'answered' | 'expired' | 'invalidated';
+export type HumanGateResolveSource = 'terminal' | 'discord' | 'timeout' | 'restart';
+
+export interface HumanGate {
+  id: string; // 唯一编号
+  sessionId: string; // 所属会话
+  provider: ProviderName; // 提供方
+  type: HumanGateType; // 门控类型
+  isBlocking: boolean; // 是否阻塞
+  supportsRemoteDecision: boolean; // 是否支持 Discord 决策
+  summary: string; // 摘要
+  detail?: string; // 详细信息
+  relatedCommand?: string; // 关联命令
+  createdAt: number; // 创建时间
+  status: HumanGateStatus; // 当前状态
+  resolvedAt?: number; // 解决时间
+  resolvedSource?: HumanGateResolveSource; // 解决来源
+  resolvedAction?: string; // 解决动作（approve/deny/answer）
+  interactionMessageId?: string; // 交互卡消息编号
+  turn: number; // 所属轮次
 }
 
 // ─── Agent Persona ────────────────────────────────────────────────────────────

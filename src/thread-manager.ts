@@ -313,6 +313,15 @@ export function getSessionByChannel(channelId: string): ThreadSession | undefine
 /** Backward-compat alias (subagent sessions are still threads). */
 export const getSessionByThread = getSessionByChannel;
 
+export function getSessionByCodexId(codexSessionId: string): ThreadSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.provider === 'codex' && session.providerSessionId === codexSessionId) {
+      return session;
+    }
+  }
+  return undefined;
+}
+
 export function getSessionByProviderSession(
   provider: ProviderName,
   providerSessionId: string,

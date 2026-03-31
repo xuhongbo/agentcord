@@ -36,6 +36,7 @@ import {
 import { loadProjects } from './project-manager.ts';
 import { CodexLogMonitor } from './monitors/codex-log-monitor.ts';
 import { handleCodexMonitorStateChange } from './codex-monitor-bridge.ts';
+import { startHookServer, stopHookServer } from './hook-server.ts';
 import { homedir } from 'node:os';
 import { runSubagentWatchdog } from './subagent-manager.ts';
 import { loadArchived, checkAutoArchive } from './archive-manager.ts';
@@ -317,6 +318,10 @@ export async function startBot(): Promise<void> {
     codexMonitor.start();
     botLog('Codex log monitor started');
 
+    // Start hook server for real-time Claude Code events
+    startHookServer(client);
+    botLog('Hook server started on port 48760');
+
     // Start health monitoring
     if (config.healthReportEnabled) {
       startHealthMonitor(client, botLog);
@@ -403,6 +408,7 @@ export async function startBot(): Promise<void> {
       codexMonitor.stop();
       codexMonitor = null;
     }
+    stopHookServer();
     await flushLogs();
     stopSync();
     stopHealthMonitor();
