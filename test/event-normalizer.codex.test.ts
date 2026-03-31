@@ -48,4 +48,14 @@ describe('normalizeCodexEvent', () => {
     expect(event?.type).toBe('awaiting_human');
     expect(event?.confidence).toBe('medium');
   });
+
+  it('当 observedState 为 codex-permission 时优先映射为 awaiting_human', () => {
+    const event = normalizeCodexEvent('response_item:function_call', 'session-5', {
+      observedState: 'codex-permission',
+    });
+
+    expect(event).not.toBeNull();
+    expect(event?.type).toBe('awaiting_human');
+    expect(event?.confidence).toBe('medium');
+  });
 });

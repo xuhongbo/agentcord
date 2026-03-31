@@ -55,7 +55,7 @@ export function normalizeCodexEvent(
 ): PlatformEvent | null {
   const byEvent = mapCodexToPlatformType(eventKey);
   const byState = mapCodexStateToPlatformType(extra.observedState);
-  const platformType = byEvent ?? byState;
+  const platformType = byState ?? byEvent;
   if (!platformType) return null;
 
   return {
