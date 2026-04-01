@@ -1,7 +1,7 @@
 // 统一状态机单元测试
 // 验证三层状态模型的转换规则、幂等性和非法转换拒绝
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StateMachine } from '../src/state/state-machine.js';
 import type {
   SessionLifecycle,
@@ -14,6 +14,10 @@ describe('StateMachine - 三层状态模型', () => {
 
   beforeEach(() => {
     sm = new StateMachine();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('getState', () => {
@@ -229,5 +233,55 @@ describe('StateMachine - 三层状态模型', () => {
       expect(history.length).toBe(0);
     });
   });
-});
 
+  describe('applyPlatformEvent - session_idle 防止过期计时器回写', () => {
+    it('应该忽略离开 completed 后的延迟 session_idle 事件', () => {
+      vi.useFakeTimers();
+      const sessionId = 'session-idle-guard';
+
+      sm.incrementTurn(sessionId);
+      sm.applyPlatformEvent({
+        type: 'completed',
+        sessionId,
+        source: 'codex',
+        confidence: 'high',
+        timestamp: Date.now(),
+      });
+
+      sm.applyPlatformEvent({
+        type: 'session_ended',
+        sessionId,
+        source: 'codex',
+        confidence: 'high',
+        timestamp: Date.now(),
+      });
+
+      vi.advanceTimersByTime(3000);
+
+      expect(sm.getSession(sessionId)?.state).toBe('offline');
+    });
+
+    it('应该拒绝没有有效 token 的外部 session_idle 事件', () => {
+      const sessionId = 'session-idle-no-token';
+
+      sm.incrementTurn(sessionId);
+      sm.applyPlatformEvent({
+        type: 'thinking_started',
+        sessionId,
+        source: 'codex',
+        confidence: 'high',
+        timestamp: Date.now(),
+      });
+
+      sm.applyPlatformEvent({
+        type: 'session_idle',
+        sessionId,
+        source: 'codex',
+        confidence: 'high',
+        timestamp: Date.now(),
+      });
+
+      expect(sm.getSession(sessionId)?.state).toBe('thinking');
+    });
+  });
+});

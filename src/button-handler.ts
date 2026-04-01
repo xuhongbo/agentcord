@@ -32,6 +32,13 @@ import {
 } from './output-handler.ts';
 import { executeSessionContinue, executeSessionPrompt } from './session-executor.ts';
 import { updateSessionState } from './panel-adapter.ts';
+import {
+  acquireCleanupLock,
+  deleteCleanupRequest,
+  getCleanupRequest,
+  releaseCleanupLock,
+} from './agent-cleanup-request-store.ts';
+import { archiveSessionsById } from './session-housekeeping.ts';
 import { isUserAllowed, truncate } from './utils.ts';
 import { gateCoordinator } from './state/gate-coordinator.ts';
 
@@ -53,6 +60,31 @@ async function resolveAwaitingHumanIfNeeded(sessionId: string): Promise<void> {
     timestamp: Date.now(),
     metadata: { source: 'answer' },
   });
+}
+
+function renderCleanupResultMessage(result: {
+  archivedSessions: number;
+  skippedGenerating: number;
+  missingSessions: number;
+  failed: Array<{ sessionId: string; channelId?: string; message: string }>;
+}): string {
+  const lines = [
+    '批量清理完成',
+    '',
+    `- 已归档：${result.archivedSessions}`,
+    `- 跳过进行中：${result.skippedGenerating}`,
+    `- 缺失：${result.missingSessions}`,
+    `- 失败：${result.failed.length}`,
+  ];
+
+  if (result.failed.length > 0) {
+    lines.push('', '失败明细：');
+    lines.push(
+      ...result.failed.map((item) => `- ${item.channelId ? `<#${item.channelId}> ` : ''}${item.sessionId}：${item.message}`),
+    );
+  }
+
+  return lines.join('\n');
 }
 
 export async function handleButton(interaction: ButtonInteraction): Promise<void> {
@@ -255,6 +287,79 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       content: '⚠️ 此交互方式已废弃，请使用最新的交互卡',
       ephemeral: true
     });
+    return;
+  }
+
+  if (customId.startsWith('cleanup:cancel:')) {
+    const requestId = customId.slice('cleanup:cancel:'.length);
+    const request = getCleanupRequest(requestId);
+    if (!request) {
+      await interaction.reply({
+        content: '这次清理请求已失效，请重新执行 /agent cleanup。',
+        ephemeral: true,
+      });
+      return;
+    }
+    if (request.userId !== interaction.user.id) {
+      await interaction.reply({
+        content: '只有发起这次清理的人可以确认或取消。',
+        ephemeral: true,
+      });
+      return;
+    }
+    deleteCleanupRequest(requestId);
+    await interaction.update({
+      content: '本次批量清理已取消。',
+      components: [],
+    });
+    return;
+  }
+
+  if (customId.startsWith('cleanup:confirm:')) {
+    const requestId = customId.slice('cleanup:confirm:'.length);
+    const request = getCleanupRequest(requestId);
+    if (!request) {
+      await interaction.reply({
+        content: '这次清理请求已失效，请重新执行 /agent cleanup。',
+        ephemeral: true,
+      });
+      return;
+    }
+    if (request.userId !== interaction.user.id) {
+      await interaction.reply({
+        content: '只有发起这次清理的人可以确认或取消。',
+        ephemeral: true,
+      });
+      return;
+    }
+    if (!interaction.guild) {
+      await interaction.reply({ content: 'Guild context required.', ephemeral: true });
+      return;
+    }
+    if (!acquireCleanupLock(request.categoryId)) {
+      await interaction.reply({
+        content: '当前项目正在执行批量清理，请稍后再试。',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    try {
+      const result = await archiveSessionsById(
+        interaction.guild,
+        request.candidateSessionIds,
+        'Bulk cleanup from Discord command',
+      );
+      deleteCleanupRequest(requestId);
+      await interaction.editReply({
+        content: renderCleanupResultMessage(result),
+        components: [],
+      });
+    } finally {
+      releaseCleanupLock(request.categoryId);
+    }
     return;
   }
 

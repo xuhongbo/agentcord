@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   ChannelType,
   ThreadAutoArchiveDuration,
@@ -17,6 +20,8 @@ import { executeSessionPrompt, executeSessionContinue } from './session-executor
 import { makeModeButtons, resolveEffectiveClaudePermissionMode } from './output-handler.ts';
 import * as panelAdapter from './panel-adapter.ts';
 import { executeShellCommand, listProcesses, killProcess } from './shell-handler.ts';
+import { createCleanupRequest } from './agent-cleanup-request-store.ts';
+import { buildProjectCleanupPreview } from './session-housekeeping.ts';
 import { isUserAllowed, resolvePath, formatUptime, formatRelative } from './utils.ts';
 import type { ProviderName, SessionMode } from './types.ts';
 
@@ -75,6 +80,53 @@ async function registerStatusCardWithPanelAdapter(
 
 const CONTROL_CHANNEL_NAME = 'control';
 
+function formatCleanupChannelLine(channelId: string, label?: string): string {
+  return label ? `- <#${channelId}> ${label}` : `- <#${channelId}>`;
+}
+
+function renderCleanupPreviewMessage(preview: ReturnType<typeof buildProjectCleanupPreview>): string {
+  const lines = [
+    '批量清理预览',
+    '',
+    `项目：${preview.projectName}`,
+    '范围：当前项目分类下的其他空闲会话',
+    '',
+    '将保留：',
+    `- 当前频道：<#${preview.protectedChannels.currentChannelId}>`,
+  ];
+
+  if (preview.protectedChannels.controlChannelId) {
+    lines.push(`- 控制频道：<#${preview.protectedChannels.controlChannelId}>`);
+  }
+  if (preview.protectedChannels.historyChannelId) {
+    lines.push(`- 历史归档：<#${preview.protectedChannels.historyChannelId}>`);
+  }
+
+  lines.push('', '将跳过（进行中）：');
+  if (preview.skippedGenerating.length === 0) {
+    lines.push('- 无');
+  } else {
+    lines.push(
+      ...preview.skippedGenerating.map((session) =>
+        formatCleanupChannelLine(session.channelId, session.agentLabel),
+      ),
+    );
+  }
+
+  lines.push('', '将归档：');
+  lines.push(
+    ...preview.archiveCandidates.map((session) =>
+      formatCleanupChannelLine(session.channelId, session.agentLabel),
+    ),
+  );
+  lines.push(
+    '',
+    `预计归档 ${preview.archiveCandidates.length} 个频道，跳过 ${preview.skippedGenerating.length} 个进行中的会话。`,
+  );
+
+  return lines.join('\n');
+}
+
 function assertUserAllowed(interaction: ChatInputCommandInteraction): boolean {
   if (!isUserAllowed(interaction.user.id, config.allowedUsers, config.allowAllUsers)) {
     interaction.reply({ content: 'You are not authorized to use this bot.', ephemeral: true });
@@ -99,6 +151,18 @@ function resolveProjectCategoryId(interaction: ChatInputCommandInteraction): str
 
   // TextChannel → parentId is the category
   return (channel as TextChannel).parentId ?? null;
+}
+
+function resolveCleanupCurrentChannelId(interaction: ChatInputCommandInteraction): string | null {
+  const channel = interaction.channel;
+  if (!channel) return null;
+
+  if (channel.isThread()) {
+    const parent = (channel as AnyThreadChannel).parent as TextChannel | null;
+    return parent?.id ?? null;
+  }
+
+  return (channel as TextChannel).id ?? null;
 }
 
 function findControlChannel(guild: Guild, categoryId: string): TextChannel | null {
@@ -488,6 +552,8 @@ export async function handleAgent(interaction: ChatInputCommandInteraction): Pro
       return handleAgentSpawn(interaction);
     case 'list':
       return handleAgentList(interaction);
+    case 'cleanup':
+      return handleAgentCleanup(interaction);
     case 'stop':
       return handleAgentStop(interaction);
     case 'end':
@@ -698,6 +764,74 @@ async function handleAgentList(interaction: ChatInputCommandInteraction): Promis
     .setDescription(lines.join('\n'));
 
   await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleAgentCleanup(interaction: ChatInputCommandInteraction): Promise<void> {
+  const categoryId = resolveProjectCategoryId(interaction);
+  if (!categoryId) {
+    await interaction.reply({ content: 'Could not determine project category.', ephemeral: true });
+    return;
+  }
+
+  const project = projectMgr.getProject(categoryId);
+  if (!project) {
+    await interaction.reply({
+      content: 'No project set up for this category. Run `/project setup` first.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!interaction.guild) {
+    await interaction.reply({ content: 'Guild context required.', ephemeral: true });
+    return;
+  }
+
+  const currentChannelId = resolveCleanupCurrentChannelId(interaction);
+  if (!currentChannelId) {
+    await interaction.reply({ content: 'Could not determine current channel.', ephemeral: true });
+    return;
+  }
+
+  const preview = buildProjectCleanupPreview({
+    categoryId,
+    currentChannelId,
+    controlChannelId: project.controlChannelId,
+    historyChannelId: project.historyChannelId,
+    projectName: project.name,
+  });
+
+  if (preview.archiveCandidates.length === 0) {
+    await interaction.reply({ content: '没有可清理的空闲会话', ephemeral: true });
+    return;
+  }
+
+  const request = createCleanupRequest({
+    userId: interaction.user.id,
+    guildId: interaction.guild.id,
+    categoryId,
+    currentChannelId,
+    candidateSessionIds: preview.archiveCandidates.map((session) => session.id),
+  });
+
+  const components = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`cleanup:confirm:${request.id}`)
+        .setLabel('确认归档')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`cleanup:cancel:${request.id}`)
+        .setLabel('取消')
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+
+  await interaction.reply({
+    content: renderCleanupPreviewMessage(preview),
+    components,
+    ephemeral: true,
+  });
 }
 
 async function handleAgentStop(interaction: ChatInputCommandInteraction): Promise<void> {

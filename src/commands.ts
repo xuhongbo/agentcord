@@ -126,6 +126,9 @@ const commands = [
     .addSubcommand((sub) =>
       sub.setName('archive').setDescription('把当前会话归档到 #history 并删除频道'),
     )
+    .addSubcommand((sub) =>
+      sub.setName('cleanup').setDescription('预览并批量归档当前项目下的其他空闲会话'),
+    )
     .addSubcommand((sub) => sub.setName('stop').setDescription('停止当前会话中的生成'))
     .addSubcommand((sub) => sub.setName('end').setDescription('结束当前会话'))
     .addSubcommand((sub) =>

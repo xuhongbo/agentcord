@@ -47,6 +47,8 @@ const setStatusCardBinding = vi.fn();
 const spawnSubagent = vi.fn();
 const getSubagents = vi.fn();
 const archiveSession = vi.fn();
+const buildProjectCleanupPreview = vi.fn();
+const createCleanupRequest = vi.fn();
 const executeSessionPrompt = vi.fn();
 const executeSessionContinue = vi.fn();
 const makeModeButtons = vi.fn(() => []);
@@ -89,6 +91,12 @@ vi.mock('../src/thread-manager.ts', () => ({
 }));
 vi.mock('../src/subagent-manager.ts', () => ({ spawnSubagent, getSubagents }));
 vi.mock('../src/archive-manager.ts', () => ({ archiveSession }));
+vi.mock('../src/session-housekeeping.ts', () => ({
+  buildProjectCleanupPreview,
+}));
+vi.mock('../src/agent-cleanup-request-store.ts', () => ({
+  createCleanupRequest,
+}));
 vi.mock('../src/session-executor.ts', () => ({ executeSessionPrompt, executeSessionContinue }));
 vi.mock('../src/output-handler.ts', () => ({ makeModeButtons, resolveEffectiveClaudePermissionMode }));
 vi.mock('../src/shell-handler.ts', () => ({ executeShellCommand, listProcesses, killProcess }));
@@ -150,6 +158,27 @@ beforeEach(() => {
   getMcpServers.mockReturnValue([]);
   getSessionByChannel.mockReturnValue(session);
   getSessionsByCategory.mockReturnValue([]);
+  buildProjectCleanupPreview.mockReturnValue({
+    categoryId: 'cat-1',
+    projectName: 'demo',
+    protectedChannels: {
+      currentChannelId: 'current-1',
+      controlChannelId: 'control-1',
+      historyChannelId: 'forum-1',
+    },
+    archiveCandidates: [],
+    skippedGenerating: [],
+    skippedUnknown: [],
+  });
+  createCleanupRequest.mockReturnValue({
+    id: 'cleanup-1',
+    userId: 'user-1',
+    guildId: 'guild-1',
+    categoryId: 'cat-1',
+    currentChannelId: 'current-1',
+    candidateSessionIds: [],
+    createdAt: 1,
+  });
   createSession.mockResolvedValue({ ...session, claudePermissionMode: 'normal' });
   abortSession.mockReturnValue(true);
   listProcesses.mockReturnValue([]);
@@ -298,6 +327,124 @@ describe('agent commands', () => {
     const interaction = makeInteraction({ subcommand: 'archive', channel: makeTextChannel({ id: 'session-channel', parentId: 'cat-1' }) });
     await handleAgent(interaction as never);
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('Only persistent sessions can be archived') }));
+  });
+
+  it('cleanup 在有候选时返回预览消息与确认按钮', async () => {
+    buildProjectCleanupPreview.mockReturnValue({
+      categoryId: 'cat-1',
+      projectName: 'demo',
+      protectedChannels: {
+        currentChannelId: 'current-1',
+        controlChannelId: 'control-1',
+        historyChannelId: 'forum-1',
+      },
+      archiveCandidates: [{ id: 'idle-1', channelId: 'idle-1', agentLabel: 'idle-one' }],
+      skippedGenerating: [{ id: 'run-1', channelId: 'run-1', agentLabel: 'running-one' }],
+      skippedUnknown: [],
+    });
+    createCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'user-1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      candidateSessionIds: ['idle-1'],
+      createdAt: 1,
+    });
+
+    const interaction = makeInteraction({
+      subcommand: 'cleanup',
+      channel: makeTextChannel({ id: 'current-1', parentId: 'cat-1' }),
+      guild: makeGuild({ channels: [makeTextChannel({ id: 'current-1', parentId: 'cat-1' })] }),
+    });
+
+    await handleAgent(interaction as never);
+
+    expect(buildProjectCleanupPreview).toHaveBeenCalledWith({
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      controlChannelId: 'control-1',
+      historyChannelId: 'forum-1',
+      projectName: 'demo',
+    });
+    expect(createCleanupRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        guildId: 'guild-1',
+        categoryId: 'cat-1',
+        currentChannelId: 'current-1',
+        candidateSessionIds: ['idle-1'],
+      }),
+    );
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ephemeral: true,
+        content: expect.stringContaining('批量清理预览'),
+        components: expect.any(Array),
+      }),
+    );
+  });
+
+  it('cleanup 在子代理线程中执行时会保护父会话频道', async () => {
+    buildProjectCleanupPreview.mockReturnValue({
+      categoryId: 'cat-1',
+      projectName: 'demo',
+      protectedChannels: {
+        currentChannelId: 'session-channel',
+        controlChannelId: 'control-1',
+        historyChannelId: 'forum-1',
+      },
+      archiveCandidates: [{ id: 'idle-1', channelId: 'idle-1', agentLabel: 'idle-one' }],
+      skippedGenerating: [],
+      skippedUnknown: [],
+    });
+    createCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'user-1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'session-channel',
+      candidateSessionIds: ['idle-1'],
+      createdAt: 1,
+    });
+
+    const parentChannel = makeTextChannel({ id: 'session-channel', parentId: 'cat-1' });
+    const interaction = makeInteraction({
+      subcommand: 'cleanup',
+      channel: makeThreadChannel({ id: 'thread-1', parent: parentChannel }),
+      guild: makeGuild({ channels: [parentChannel] }),
+    });
+
+    await handleAgent(interaction as never);
+
+    expect(buildProjectCleanupPreview).toHaveBeenCalledWith({
+      categoryId: 'cat-1',
+      currentChannelId: 'session-channel',
+      controlChannelId: 'control-1',
+      historyChannelId: 'forum-1',
+      projectName: 'demo',
+    });
+    expect(createCleanupRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentChannelId: 'session-channel',
+      }),
+    );
+  });
+
+  it('cleanup 在无候选时直接提示没有可清理的空闲会话', async () => {
+    const interaction = makeInteraction({
+      subcommand: 'cleanup',
+      channel: makeTextChannel({ id: 'current-1', parentId: 'cat-1' }),
+      guild: makeGuild({ channels: [makeTextChannel({ id: 'current-1', parentId: 'cat-1' })] }),
+    });
+
+    await handleAgent(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: '没有可清理的空闲会话',
+      ephemeral: true,
+    });
+    expect(createCleanupRequest).not.toHaveBeenCalled();
   });
 
   it('mode 设置模式', async () => {

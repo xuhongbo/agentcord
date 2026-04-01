@@ -9,4 +9,13 @@ describe('commands contract', () => {
       expect.arrayContaining(['project', 'agent', 'subagent', 'shell', 'spawn', 'stop', 'end', 'run']),
     );
   });
+
+  it('agent 命令包含 cleanup 子命令', () => {
+    const defs = getCommandDefinitions();
+    const agent = defs.find((definition) => definition.name === 'agent');
+
+    expect(agent?.options?.map((option) => option.name)).toEqual(
+      expect.arrayContaining(['cleanup']),
+    );
+  });
 });
