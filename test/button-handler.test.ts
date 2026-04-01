@@ -8,6 +8,11 @@ const updateSessionState = vi.fn();
 const getGate = vi.fn();
 const getActiveGateForSession = vi.fn();
 const resolveFromDiscord = vi.fn();
+const getCleanupRequest = vi.fn();
+const deleteCleanupRequest = vi.fn();
+const acquireCleanupLock = vi.fn();
+const releaseCleanupLock = vi.fn();
+const archiveSessionsById = vi.fn();
 
 vi.mock('../src/config.ts', () => ({
   config: {
@@ -45,6 +50,15 @@ vi.mock('../src/session-executor.ts', () => ({
 vi.mock('../src/panel-adapter.ts', () => ({
   updateSessionState,
 }));
+vi.mock('../src/agent-cleanup-request-store.ts', () => ({
+  getCleanupRequest,
+  deleteCleanupRequest,
+  acquireCleanupLock,
+  releaseCleanupLock,
+}));
+vi.mock('../src/session-housekeeping.ts', () => ({
+  archiveSessionsById,
+}));
 
 vi.mock('../src/state/gate-coordinator.ts', () => ({
   gateCoordinator: {
@@ -64,6 +78,7 @@ function createInteraction(customId: string) {
     message: { id: 'msg-active', embeds: [{ title: '等待人工处理' }] },
     reply: vi.fn(async () => undefined),
     update: vi.fn(async () => undefined),
+    deferUpdate: vi.fn(async () => undefined),
     followUp: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
     editReply: vi.fn(async () => undefined),
@@ -84,6 +99,15 @@ describe('button-handler awaiting_human', () => {
     getGate.mockReturnValue({ id: 'gate-1', status: 'pending' });
     getActiveGateForSession.mockReturnValue(undefined);
     resolveFromDiscord.mockResolvedValue({ success: true });
+    getCleanupRequest.mockReturnValue(undefined);
+    deleteCleanupRequest.mockReturnValue(true);
+    acquireCleanupLock.mockReturnValue(true);
+    archiveSessionsById.mockResolvedValue({
+      archivedSessions: 1,
+      skippedGenerating: 0,
+      missingSessions: 0,
+      failed: [],
+    });
   });
 
   it('approve 会清理交互状态、同步状态并继续会话', async () => {
@@ -150,5 +174,116 @@ describe('button-handler awaiting_human', () => {
     expect(updateSession).not.toHaveBeenCalled();
     expect(updateSessionState).not.toHaveBeenCalled();
     expect(executeSessionPrompt).not.toHaveBeenCalled();
+  });
+
+  it('cleanup cancel 会删除请求并更新消息', async () => {
+    getCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'u1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      candidateSessionIds: ['session-1'],
+      createdAt: Date.now(),
+    });
+    const interaction = createInteraction('cleanup:cancel:cleanup-1');
+
+    await handleButton(interaction as never);
+
+    expect(deleteCleanupRequest).toHaveBeenCalledWith('cleanup-1');
+    expect(interaction.update).toHaveBeenCalledWith({
+      content: '本次批量清理已取消。',
+      components: [],
+    });
+  });
+
+  it('cleanup confirm 会调用批量归档并释放锁', async () => {
+    getCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'u1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      candidateSessionIds: ['session-1'],
+      createdAt: Date.now(),
+    });
+    const interaction = createInteraction('cleanup:confirm:cleanup-1');
+    interaction.guild = { id: 'guild-1' };
+
+    await handleButton(interaction as never);
+
+    expect(acquireCleanupLock).toHaveBeenCalledWith('cat-1');
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(archiveSessionsById).toHaveBeenCalledWith(
+      interaction.guild,
+      ['session-1'],
+      'Bulk cleanup from Discord command',
+    );
+    expect(deleteCleanupRequest).toHaveBeenCalledWith('cleanup-1');
+    expect(releaseCleanupLock).toHaveBeenCalledWith('cat-1');
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('批量清理完成'),
+        components: [],
+      }),
+    );
+    expect(interaction.update).not.toHaveBeenCalled();
+  });
+
+  it('cleanup confirm 在请求过期时提示重新执行', async () => {
+    const interaction = createInteraction('cleanup:confirm:cleanup-missing');
+
+    await handleButton(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: '这次清理请求已失效，请重新执行 /agent cleanup。',
+      ephemeral: true,
+    });
+    expect(archiveSessionsById).not.toHaveBeenCalled();
+  });
+
+  it('cleanup confirm 在非发起人点击时拒绝处理', async () => {
+    getCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'owner-1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      candidateSessionIds: ['session-1'],
+      createdAt: Date.now(),
+    });
+    const interaction = createInteraction('cleanup:confirm:cleanup-1');
+
+    await handleButton(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: '只有发起这次清理的人可以确认或取消。',
+      ephemeral: true,
+    });
+    expect(archiveSessionsById).not.toHaveBeenCalled();
+  });
+
+  it('cleanup confirm 在项目已加锁时拒绝重复执行', async () => {
+    getCleanupRequest.mockReturnValue({
+      id: 'cleanup-1',
+      userId: 'u1',
+      guildId: 'guild-1',
+      categoryId: 'cat-1',
+      currentChannelId: 'current-1',
+      candidateSessionIds: ['session-1'],
+      createdAt: Date.now(),
+    });
+    acquireCleanupLock.mockReturnValue(false);
+    const interaction = createInteraction('cleanup:confirm:cleanup-1');
+    interaction.guild = { id: 'guild-1' };
+
+    await handleButton(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: '当前项目正在执行批量清理，请稍后再试。',
+      ephemeral: true,
+    });
+    expect(archiveSessionsById).not.toHaveBeenCalled();
+    expect(releaseCleanupLock).not.toHaveBeenCalled();
   });
 });
